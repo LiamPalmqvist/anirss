@@ -12,6 +12,7 @@ class Item(NamedTuple):
     size: str = ""
     category: str = ""
     page: str = ""      # release post URL, when the feed exposes one (erai)
+    source: str = ""    # endpoint these results fell back to ("" = the active one)
 
 
 class Group(NamedTuple):

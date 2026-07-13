@@ -1,7 +1,7 @@
 """Display helpers: colored stats, titles, results box."""
 
 from anirss_lib.ansi import (
-    C_CYN, C_DIM, C_GRN, C_OFF, C_RED, C_YEL,
+    C_BLD, C_CYN, C_DIM, C_GRN, C_OFF, C_RED, C_YEL,
     ansi_strip, right_anchor, truncate_ansi,
 )
 from anirss_lib import terminal
@@ -40,6 +40,12 @@ def colorize_picker_label(label: str, width: int = 0) -> str:
     out = f"{C_DIM}+{C_OFF}".join(colored)
     pad = max(0, width - len(label))
     return out + (" " * pad)
+
+
+def source_header_row(name: str, width: int) -> str:
+    """A title-style divider row naming a fallback source endpoint."""
+    fill = "─" * max(0, width - len(name) - 4)
+    return f"{C_DIM}──{C_OFF} {C_BLD}{C_YEL}{name}{C_OFF} {C_DIM}{fill}{C_OFF}"
 
 
 def category_chip(item: Item) -> str:
@@ -109,7 +115,27 @@ def show_titles(items: list[Item], cap: int | None = None,
         print(f"{C_DIM}╭{bar}╮{C_OFF}")
     else:
         inner = width
-    for item in items[:cap]:
+
+    def emit(line: str) -> None:
+        if show_box:
+            print(f"{C_DIM}│{C_OFF} {line} {C_DIM}│{C_OFF}")
+        else:
+            print(line)
+
+    # Source-header rows: when a run of items carries a `source` (results the
+    # search fell back to from another endpoint), a title-style divider row
+    # naming that endpoint precedes it. Headers spend list rows like items do,
+    # so the responsive cap stays honest.
+    rows = 0
+    shown = 0
+    prev_source = ""
+    for item in items:
+        if rows >= cap:
+            break
+        if item.source and item.source != prev_source and rows + 1 < cap:
+            emit(source_header_row(item.source, inner))
+            rows += 1
+        prev_source = item.source
         cat = category_chip(item) if (show_cat and item.category) else ""
         cat_w = len(item.category) + 1 if cat else 0  # +1 for gap
         body_max = max(10, inner - cat_w)
@@ -118,13 +144,12 @@ def show_titles(items: list[Item], cap: int | None = None,
             line = right_anchor(body, cat, inner)
         else:
             line = body + " " * max(0, inner - len(ansi_strip(body)))
-        if show_box:
-            print(f"{C_DIM}│{C_OFF} {line} {C_DIM}│{C_OFF}")
-        else:
-            print(line)
+        emit(line)
+        rows += 1
+        shown += 1
     if show_box:
         print(f"{C_DIM}╰{bar}╯{C_OFF}")
-    if len(items) > cap:
-        more = len(items) - cap
+    if len(items) > shown:
+        more = len(items) - shown
         print(f"  {C_DIM}... and {more} more "
               f"({C_OFF}{C_YEL}use [show all] in the picker{C_OFF}{C_DIM}){C_OFF}")

@@ -183,6 +183,9 @@ def probe_fallback(state: EndpointState, query: str, fetch=None
         if items:
             state.active = ep
             notes.append(f"{ep.name}: {len(items)}")
-            return items, notes
+            # Tag where these came from so the results list can render a
+            # source-header row above them (the search didn't ask for this
+            # endpoint, it fell back to it).
+            return [it._replace(source=ep.name) for it in items], notes
         notes.append(f"{ep.name}: 0")
     return [], notes

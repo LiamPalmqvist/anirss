@@ -154,6 +154,16 @@ def test_probe_fallback_switches_to_first_hit():
     assert notes == ["anirena: 1"]
 
 
+def test_probe_fallback_tags_items_with_source():
+    st = EndpointState([NYAA, ANIRENA])
+
+    def fake_fetch(ep, query):
+        return [Item("t", "l"), Item("t2", "l2")] if ep.name == "anirena" else []
+
+    items, _ = endpoints.probe_fallback(st, "q", fetch=fake_fetch)
+    assert [it.source for it in items] == ["anirena", "anirena"]
+
+
 def test_probe_fallback_all_fail_keeps_active():
     third = Endpoint(name="tosho", kind="rss", url="https://x/?q={query}")
     st = EndpointState([NYAA, ANIRENA, third])

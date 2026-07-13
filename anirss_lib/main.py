@@ -26,6 +26,7 @@ from anirss_lib import endpoints as endpoints_mod
 from anirss_lib.endpoints import Endpoint, EndpointState, load_endpoints
 from anirss_lib.format import (
     category_chip, colorize_title, format_stats, show_titles,
+    source_header_row,
 )
 from anirss_lib.fzf import fzf_search_prompt
 from anirss_lib.logging import die, init_log, log
@@ -82,19 +83,46 @@ def _login_for(parsed: ParsedArgs, cfg: AnirssConfig):
     return login_with_password(cfg["qbittorrent"], pw)
 
 
-def _print_search_rss_rows(query: str, ep: Endpoint) -> None:
-    """Hidden self-invocation handler called by fzf's reload binding."""
+def _print_search_rss_rows(query: str, ep: Endpoint,
+                           endpoints: list[Endpoint]) -> None:
+    """Hidden self-invocation handler called by fzf's reload binding.
+
+    Prints the active endpoint's rows. When it comes up empty (or is
+    unreachable), the other endpoints are probed in priority order and the
+    first hit is printed under a source-header row, mirroring the
+    probe_fallback behavior of a confirmed search. Rows here are display
+    only (the live-search fzf runs --disabled with Enter as an exit key),
+    so the header can never be selected."""
+    width = max(40, terminal.get_size().columns - 3)
+
+    def print_rows(found: list[Item]) -> None:
+        for item in found:
+            line = f"{format_stats(item)}  {colorize_title(item.title)}"
+            if item.category:
+                line = right_anchor(line, category_chip(item), width)
+            print(line)
+
     try:
         items = endpoints_mod.fetch_items(ep, query)
     except FetchError as e:
+        items = []
         print(f"{C_DIM}{e}{C_OFF}")
+    if items:
+        print_rows(items)
         return
-    width = max(40, terminal.get_size().columns - 3)
-    for item in items:
-        line = f"{format_stats(item)}  {colorize_title(item.title)}"
-        if item.category:
-            line = right_anchor(line, category_chip(item), width)
-        print(line)
+    others = [e for e in endpoints if e.name != ep.name]
+    for other in others:
+        try:
+            found = endpoints_mod.fetch_items(other, query)
+        except FetchError:
+            continue
+        if found:
+            print(source_header_row(other.name, width))
+            print_rows(found)
+            return
+    if others:
+        names = ", ".join(e.name for e in endpoints)
+        print(f"{C_DIM}(no results on {names}){C_OFF}")
 
 
 # ---- meta-flag handler ----
@@ -564,7 +592,7 @@ def main() -> None:
             rest = rest[2:]
         query = " ".join(rest).strip()
         if query:
-            _print_search_rss_rows(query, active)
+            _print_search_rss_rows(query, active, endpoint_list)
         return
 
     if _handle_meta_flags(argv, cfg):
