@@ -65,6 +65,15 @@ def test_do_subscribe_sets_must_not_contain_in_rule():
     assert rule["mustNotContain"] == "HEVC|dual audio"
 
 
+def test_do_subscribe_sets_must_contain_in_rule():
+    qbt = RecordingQbt()
+    actions.do_subscribe(qbt, "http://feed", "Show", "/tmp/save",
+                         must_contain="Show 1080p WEB-DL AVC")
+    _, kwargs = next(p for p in qbt.posts if p[0] == "/api/v2/rss/setRule")
+    rule = json.loads(kwargs["ruleDef"])
+    assert rule["mustContain"] == "Show 1080p WEB-DL AVC"
+
+
 def test_do_subscribe_default_must_not_contain_is_empty():
     qbt = RecordingQbt()
     actions.do_subscribe(qbt, "http://feed", "Show", "/tmp/save")

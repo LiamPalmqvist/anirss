@@ -309,6 +309,7 @@ def _run_noninteractive(parsed: ParsedArgs, cfg: AnirssConfig, eps: EndpointStat
 
     sub_endpoint_name = ""
     must_not_contain = ""
+    must_contain = ""
     if force_url is not None:
         try:
             items = fetch_rss(force_url)
@@ -324,7 +325,15 @@ def _run_noninteractive(parsed: ParsedArgs, cfg: AnirssConfig, eps: EndpointStat
             die(str(e))
         if not items:
             die(f"no results for {initial_query!r}")
-        feed_url_for_sub, excluded = endpoints_mod.feed_url(eps.active, initial_query)
+        if parsed.subscribe:
+            # subscription_feed may cost one probe request (erai per-show
+            # resolution), so only the subscribe action pays for it.
+            feed_url_for_sub, must_contain, excluded = (
+                endpoints_mod.subscription_feed(eps.active, initial_query,
+                                                items))
+        else:
+            feed_url_for_sub, excluded = endpoints_mod.feed_url(eps.active,
+                                                                initial_query)
         sub_endpoint_name = eps.active.name
         must_not_contain = "|".join(excluded)
     else:
@@ -335,7 +344,9 @@ def _run_noninteractive(parsed: ParsedArgs, cfg: AnirssConfig, eps: EndpointStat
 
     if parsed.subscribe:
         do_subscribe(qbt, feed_url_for_sub, default_name, _save_base_for(parsed, cfg),
-                     endpoint_name=sub_endpoint_name, must_not_contain=must_not_contain,
+                     endpoint_name=sub_endpoint_name,
+                     must_not_contain=must_not_contain,
+                     must_contain=must_contain,
                      tags=_tags_for(cfg))
         if must_not_contain:
             print(f"{C_DIM}exclusions apply via the qB rule (mustNotContain): "
@@ -385,6 +396,7 @@ def _run_interactive(initial_query: str, force_url: str | None,
     feed_url: str | None = None
     sub_endpoint_name: str = ""
     must_not_contain: str = ""
+    must_contain: str = ""
     download_links: list[str] | None = None
     local_torrent_path: str | None = None
     movie_choice: Item | None = None
@@ -469,7 +481,9 @@ def _run_interactive(initial_query: str, force_url: str | None,
                 if selected:
                     default_name = show_name(selected[0].title) or default_name
                 if action == ACT_SUB:
-                    feed_url, excluded = endpoints_mod.feed_url(eps.active, query)
+                    feed_url, must_contain, excluded = (
+                        endpoints_mod.subscription_feed(eps.active, query,
+                                                        selected))
                     sub_endpoint_name = eps.active.name
                     must_not_contain = "|".join(excluded)
                 elif action == ACT_DL_ALL:
@@ -500,6 +514,7 @@ def _run_interactive(initial_query: str, force_url: str | None,
         name = do_subscribe(qbt, feed_url, name, save_base,
                             endpoint_name=sub_endpoint_name,
                             must_not_contain=must_not_contain,
+                            must_contain=must_contain,
                             tags=tags)
         summary = (f"{C_GRN}✓{C_OFF} Subscribed: {C_BLD}{name}{C_OFF}{hidden_tag}"
                    f"  {C_DIM}(feed: {feed_url}){C_OFF}")

@@ -63,6 +63,16 @@ filter = "0"
 #name = "anirena"
 #kind = "rss"
 #url = "https://www.anirena.com/rss?q={query}&adult=1"
+
+# Erai-raws members-only tokenized feed also works as kind = "rss" (get your
+# token from their RSS page). anirss recognizes erai feeds and cleans up the
+# titles, and subscribing registers the show's own /anime-list/<slug>/feed/
+# in qBittorrent (validated with one request; falls back to this search URL)
+# with the query enforced via the rule's mustContain:
+#[[endpoint]]
+#name = "erai"
+#kind = "rss"
+#url = "https://www.erai-raws.info/episodes/feed/?res=1080p&type=torrent&subs%5B0%5D=us&s={query}&token=YOUR_TOKEN"
 ```
 
 There are two kinds:

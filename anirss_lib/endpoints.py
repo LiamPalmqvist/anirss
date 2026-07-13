@@ -122,6 +122,30 @@ def feed_url(ep: Endpoint, query: str) -> tuple[str, list[str]]:
     return search_url(ep, positive), excluded
 
 
+def subscription_feed(ep: Endpoint, query: str, items: list[Item]
+                      ) -> tuple[str, str, list[str]]:
+    """(feed_url, must_contain, excluded) to persist as a qB subscription.
+
+    Erai endpoints subscribe to the per-show anime-list feed when the slug
+    can be resolved from `items` (see erai.resolve_show_feed); the positive
+    query terms then move into the rule's mustContain since the per-show URL
+    no longer encodes the search. Quoted phrases are unwrapped and poster
+    fields dropped: qB matches whitespace-separated tokens against the raw
+    feed titles, which carry no [group] poster. Every other endpoint keeps
+    the feed_url() behavior with an empty mustContain."""
+    from anirss_lib import erai
+    if erai.is_erai(ep):
+        per_show = erai.resolve_show_feed(ep, items)
+        if per_show:
+            positive, excluded = split_exclusions(query)
+            must = " ".join(
+                field.strip('"') for field in FIELD_RE.findall(positive)
+                if not field.startswith("["))
+            return per_show, must, excluded
+    url, excluded = feed_url(ep, query)
+    return url, "", excluded
+
+
 def filter_excluded(items: list[Item], terms: list[str]) -> list[Item]:
     """Drop items whose title contains any excluded term (case-insensitive)."""
     if not terms:

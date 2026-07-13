@@ -164,6 +164,7 @@ def _unique_rule_name(qbt: QbtSession, name: str, feed_url: str,
 
 def do_subscribe(qbt: QbtSession, feed_url: str, name: str, save_base: str,
                  endpoint_name: str = "", must_not_contain: str = "",
+                 must_contain: str = "",
                  tags: list[str] | None = None) -> str:
     name = _unique_rule_name(qbt, name, feed_url, endpoint_name)
     save_path = os.path.join(save_base, name)
@@ -171,7 +172,7 @@ def do_subscribe(qbt: QbtSession, feed_url: str, name: str, save_base: str,
     qbt.post("/api/v2/rss/addFeed", url=feed_url, path=name)
     rule = {
         "enabled": True,
-        "mustContain": "",
+        "mustContain": must_contain,
         "mustNotContain": must_not_contain,
         "useRegex": False,
         "episodeFilter": "",

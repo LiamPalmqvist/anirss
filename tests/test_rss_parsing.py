@@ -34,6 +34,26 @@ ANIRENA_XML = """<?xml version="1.0" encoding="UTF-8"?>
 </rss>"""
 
 
+ERAI_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:erai="https://www.erai-raws.info/rss-page/">
+<channel>
+  <title>Episodes &#8211; Erai-raws Torrent RSS</title>
+  <item>
+    <title>[Torrent] Gaikotsu Kishi-sama Tadaima Isekai e Odekake-chuu II - 02 [1080p CR WEB-DL AVC AAC][us][br][mx][Airing]</title>
+    <link>https://t.erai-raws.info/Torrent/2026/Summer/Gaikotsu Kishi-sama/file.mkv.torrent</link>
+    <erai:resolution>1080p</erai:resolution>
+    <erai:infomkv>CR WEB-DL AVC AAC</erai:infomkv>
+    <erai:linktype>Torrent</erai:linktype>
+    <erai:size>1.36GB</erai:size>
+    <erai:infohash>88b0c4737b638b6c5bc38c458e812e2dc635f0dc</erai:infohash>
+    <erai:subtitles>[us][br][mx]</erai:subtitles>
+    <erai:category>[Airing]</erai:category>
+    <description><![CDATA[<a href="https://www.erai-raws.info/episodes/gaikotsu-kishi-sama-tadaima-isekai-e-odekake-chuu-ii-02/">[Erai-raws] Gaikotsu Kishi-sama Tadaima Isekai e Odekake-chuu II - 02 [1080p CR WEB-DL AVC AAC][MultiSub][B8B9B54A].mkv</a> | Subtitles: [us][br][mx] | Size: 1.36GB | InfoHash: 88b0c4737b638b6c5bc38c458e812e2dc635f0dc | Categories: [Airing] ]]></description>
+  </item>
+</channel>
+</rss>"""
+
+
 def test_parse_nyaa_feed_unchanged():
     items = nyaa.parse_rss(NYAA_XML)
     assert len(items) == 1
@@ -67,6 +87,27 @@ def test_parse_generic_feed_item_without_extras():
     assert it.title == "Bare Title Without Prefix - 03"
     assert it.link == "https://www.anirena.com/torrents/019f57a5"
     assert it.size == "" and it.category == ""
+
+
+def test_parse_erai_feed_cleans_title():
+    # Linktype prefix and the subtitle-language run go; the category tag stays
+    # (a real refine facet: [Airing] vs [Encoded] vs [Batch]).
+    it = nyaa.parse_rss(ERAI_XML)[0]
+    assert it.title == ("Gaikotsu Kishi-sama Tadaima Isekai e Odekake-chuu II"
+                        " - 02 [1080p CR WEB-DL AVC AAC][Airing]")
+
+
+def test_parse_erai_feed_reads_erai_extensions():
+    it = nyaa.parse_rss(ERAI_XML)[0]
+    assert it.size == "1.36GB"
+    assert it.category == "Airing"
+    assert it.link.endswith(".torrent")
+
+
+def test_parse_erai_feed_records_post_page():
+    it = nyaa.parse_rss(ERAI_XML)[0]
+    assert it.page == ("https://www.erai-raws.info/episodes/"
+                       "gaikotsu-kishi-sama-tadaima-isekai-e-odekake-chuu-ii-02/")
 
 
 def test_parse_rss_bad_xml_raises_fetch_error():

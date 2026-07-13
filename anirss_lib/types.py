@@ -11,6 +11,7 @@ class Item(NamedTuple):
     downloads: int = 0
     size: str = ""
     category: str = ""
+    page: str = ""      # release post URL, when the feed exposes one (erai)
 
 
 class Group(NamedTuple):
