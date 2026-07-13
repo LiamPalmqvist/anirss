@@ -87,40 +87,44 @@ def _print_search_rss_rows(query: str, ep: Endpoint,
                            endpoints: list[Endpoint]) -> None:
     """Hidden self-invocation handler called by fzf's reload binding.
 
-    Prints the active endpoint's rows. When it comes up empty (or is
-    unreachable), the other endpoints are probed in priority order and the
-    first hit is printed under a source-header row, mirroring the
-    probe_fallback behavior of a confirmed search. Rows here are display
+    Prints the active endpoint's rows first. While the visible list area
+    still has unfilled lines (which covers the empty and the sparse case
+    alike), the remaining endpoints are fetched in priority order and
+    appended in full under a source-header row each. Rows here are display
     only (the live-search fzf runs --disabled with Enter as an exit key),
-    so the header can never be selected."""
-    width = max(40, terminal.get_size().columns - 3)
+    so headers can never be selected."""
+    term = terminal.get_size()
+    width = max(40, term.columns - 3)
+    # fzf runs with --height 90% and its prompt + header eat ~3 lines; only
+    # an unfilled remainder triggers appending further sources.
+    visible = max(10, int(term.lines * 0.9) - 3)
+    printed = 0
 
     def print_rows(found: list[Item]) -> None:
+        nonlocal printed
         for item in found:
             line = f"{format_stats(item)}  {colorize_title(item.title)}"
             if item.category:
                 line = right_anchor(line, category_chip(item), width)
             print(line)
+            printed += 1
 
     try:
-        items = endpoints_mod.fetch_items(ep, query)
+        print_rows(endpoints_mod.fetch_items(ep, query))
     except FetchError as e:
-        items = []
         print(f"{C_DIM}{e}{C_OFF}")
-    if items:
-        print_rows(items)
-        return
-    others = [e for e in endpoints if e.name != ep.name]
-    for other in others:
+    for other in (e for e in endpoints if e.name != ep.name):
+        if printed >= visible:
+            break
         try:
             found = endpoints_mod.fetch_items(other, query)
         except FetchError:
             continue
         if found:
             print(source_header_row(other.name, width))
+            printed += 1
             print_rows(found)
-            return
-    if others:
+    if printed == 0 and len(endpoints) > 1:
         names = ", ".join(e.name for e in endpoints)
         print(f"{C_DIM}(no results on {names}){C_OFF}")
 

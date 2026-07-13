@@ -15,13 +15,36 @@ def _out(capsys):
     return ansi_strip(capsys.readouterr().out)
 
 
-def test_preview_active_hit_no_header(monkeypatch, capsys):
-    monkeypatch.setattr(main_mod.endpoints_mod, "fetch_items",
-                        lambda ep, q: [Item("Show - 01 [1080p]", "l")])
+def test_preview_full_screen_stays_on_active(monkeypatch, capsys):
+    import os
+    # 14 lines -> visible budget of 10; the active endpoint fills it alone.
+    monkeypatch.setattr(main_mod.terminal, "get_size",
+                        lambda: os.terminal_size((80, 14)))
+
+    def fake_fetch(ep, query):
+        assert ep.name == "erai", "screen is full, must not probe others"
+        return [Item(f"Show - {i:02d} [1080p]", "l") for i in range(10)]
+
+    monkeypatch.setattr(main_mod.endpoints_mod, "fetch_items", fake_fetch)
     main_mod._print_search_rss_rows("show", ERAI, [ERAI, NYAA])
     out = _out(capsys)
     assert "Show - 01" in out
     assert "── nyaa" not in out
+
+
+def test_preview_sparse_active_appends_next_source(monkeypatch, capsys):
+    def fake_fetch(ep, query):
+        if ep.name == "erai":
+            return [Item("86 Eighty-Six - 01 ~ 11 [1080p][Batch]", "l")]
+        return [Item("86 Eighty-Six - 05 [1080p]", "l"),
+                Item("86 Eighty-Six - 04 [1080p]", "l")]
+
+    monkeypatch.setattr(main_mod.endpoints_mod, "fetch_items", fake_fetch)
+    main_mod._print_search_rss_rows("86", ERAI, [ERAI, NYAA])
+    out = _out(capsys)
+    assert "01 ~ 11" in out                      # erai's own rows first
+    assert "── nyaa " in out                     # then the source header
+    assert out.index("01 ~ 11") < out.index("── nyaa ") < out.index("- 05")
 
 
 def test_preview_empty_active_falls_back_with_header(monkeypatch, capsys):
