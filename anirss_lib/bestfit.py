@@ -346,8 +346,8 @@ def score(item: Item, cfg: BestfitConfig,
         1 if has_subs(title) else 0,
         _audio_rank(title),                                  # Dual > Multi
         grank,                                               # which trusted group
-        item.seeders,
-        item.downloads,
+        item.seeders or 0,                                   # unknown = 0 here
+        item.downloads or 0,
     )
 
 
@@ -355,6 +355,35 @@ def best_item(items: list[Item], cfg: BestfitConfig) -> Item | None:
     """The single highest-ranked release, or None for an empty list."""
     episodes = consensus_episode_count(items)
     return max(items, key=lambda it: score(it, cfg, episodes), default=None)
+
+
+def profile_parts(item: Item) -> list[str]:
+    """The facets best_fit_query would pin (poster, season, resolution,
+    source, audio) as the literals that actually appear in the title."""
+    parts: list[str] = []
+    poster = poster_of(item.title)
+    if poster:
+        parts.append(poster)
+    season = season_of(item.title)
+    if season:
+        parts.append(season)
+    res = resolution_of(item.title)
+    if res:
+        parts.append(f"{res}p")
+    src = source_of(item.title)
+    if src:
+        parts.append(src[1])
+    audio = audio_of(item.title)
+    if audio:
+        parts.append(audio[1])
+    return parts
+
+
+def matches_profile(title: str, parts: list[str]) -> bool:
+    """Does a title carry every pinned facet? (case-insensitive substrings;
+    the poster part matches literally like the others)."""
+    lowered = title.lower()
+    return all(part.lower() in lowered for part in parts)
 
 
 def clean_show_name(title: str) -> str:

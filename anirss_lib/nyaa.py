@@ -14,13 +14,16 @@ NYAA_NS = {"nyaa": "https://nyaa.si/xmlns/nyaa"}
 ERAI_NS = {"erai": "https://www.erai-raws.info/rss-page/"}
 
 
-def _int_text(elem: ET.Element | None) -> int:
+def _opt_int_text(elem: ET.Element | None) -> int | None:
+    """Stat from a namespaced element, or None when the feed doesn't carry
+    it. None is "unknown" and must never render as 0 (a real zero seed
+    count is dead; an absent count is just absent)."""
     if elem is None or not elem.text:
-        return 0
+        return None
     try:
         return int(elem.text.strip())
     except ValueError:
-        return 0
+        return None
 
 
 def _str_text(elem: ET.Element | None) -> str:
@@ -108,9 +111,9 @@ def parse_rss(data: bytes | str, endpoint_name: str = "feed") -> list[Item]:
         out.append(Item(
             title=title_text,
             link=_item_link(entry, link.text.strip()),
-            seeders=_int_text(entry.find("nyaa:seeders", NYAA_NS)),
-            leechers=_int_text(entry.find("nyaa:leechers", NYAA_NS)),
-            downloads=_int_text(entry.find("nyaa:downloads", NYAA_NS)),
+            seeders=_opt_int_text(entry.find("nyaa:seeders", NYAA_NS)),
+            leechers=_opt_int_text(entry.find("nyaa:leechers", NYAA_NS)),
+            downloads=_opt_int_text(entry.find("nyaa:downloads", NYAA_NS)),
             size=size,
             category=category,
             page=page,

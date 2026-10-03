@@ -12,9 +12,10 @@ def test_default_config_has_required_sections():
 
 def test_item_namedtuple_default_values():
     it = types.Item("title", "link")
-    assert it.seeders == 0
-    assert it.leechers == 0
-    assert it.downloads == 0
+    # Unknown stats are None, never 0 (0 means "really zero seeders").
+    assert it.seeders is None
+    assert it.leechers is None
+    assert it.downloads is None
 
 
 def test_pick_constants():

@@ -19,6 +19,11 @@ ACT_SUB, ACT_DL_PICK, ACT_DL_ALL, ACT_MOVIE, ACT_CANCEL, ACT_BACK = (
 )
 
 
+def _dl_rank(item: Item) -> int:
+    """Sort key for download counts; unknown (None) ranks last."""
+    return item.downloads if item.downloads is not None else -1
+
+
 def pick_action(n_items: int) -> str:
     rows: list[tuple[str, str, str, str]] = [
         (C_CYN, " Subscribe", "recurring RSS feed",                ACT_SUB),
@@ -53,7 +58,7 @@ def pick_downloads(items: list[Item]) -> list[Item]:
     if not shutil.which("fzf") or not items:
         return []
     width = max(40, terminal.get_size().columns - 3)
-    sorted_items = sorted(items, key=lambda i: i.downloads, reverse=True)
+    sorted_items = sorted(items, key=_dl_rank, reverse=True)
 
     sentinel = f"DONE\t  {C_GRN}{C_BLD}[Done — confirm selection]{C_OFF}"
     lines: list[str] = [sentinel]
@@ -131,7 +136,7 @@ def pick_endpoint(state):
 
 def pick_movie(items: list[Item]) -> Item | None:
     width = max(40, terminal.get_size().columns - 3)
-    sorted_items = sorted(items, key=lambda i: i.downloads, reverse=True)
+    sorted_items = sorted(items, key=_dl_rank, reverse=True)
     lines: list[str] = []
     by_key: dict[str, Item] = {}
     for item in sorted_items:

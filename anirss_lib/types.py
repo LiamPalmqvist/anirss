@@ -6,9 +6,11 @@ from typing import NamedTuple
 class Item(NamedTuple):
     title: str
     link: str
-    seeders: int = 0
-    leechers: int = 0
-    downloads: int = 0
+    # Tracker stats. None means the feed didn't carry them (unknown) —
+    # never displayed as 0; may be filled in later by stats.enrich().
+    seeders: int | None = None
+    leechers: int | None = None
+    downloads: int | None = None
     size: str = ""
     category: str = ""
     page: str = ""      # release post URL, when the feed exposes one (erai)

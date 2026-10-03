@@ -38,6 +38,7 @@ from anirss_lib.qbt.feeds import maybe_refresh_feed_cache
 from anirss_lib.qbt.session import apply_no_seed, login_with_password, login_with_retry
 from anirss_lib.readline_input import get_name, setup_readline
 from anirss_lib.refine import refine
+from anirss_lib import stats as stats_mod
 from anirss_lib.titles import show_name
 from anirss_lib.types import Item
 
@@ -45,8 +46,10 @@ from anirss_lib.types import Item
 # ---- small helpers ----
 
 def _pick_top_n(items: list[Item], n: int) -> list[Item]:
-    """Top-N by downloads, clamped to len(items). Stable for ties."""
-    return sorted(items, key=lambda i: i.downloads, reverse=True)[:n]
+    """Top-N by downloads, clamped to len(items). Stable for ties. Unknown
+    downloads (feeds without stats) sort last, like -1."""
+    return sorted(items, key=lambda i: i.downloads if i.downloads is not None else -1,
+                  reverse=True)[:n]
 
 
 def _save_base_for(parsed: "ParsedArgs", cfg: "AnirssConfig") -> str:
@@ -102,7 +105,9 @@ def _print_search_rss_rows(query: str, ep: Endpoint,
 
     def print_rows(found: list[Item]) -> None:
         nonlocal printed
-        for item in found:
+        # Fill unknown tracker stats from the torrents' trackers (cached, so
+        # repeat keystroke pauses cost nothing).
+        for item in stats_mod.enrich(found, deadline_s=8.0):
             line = f"{format_stats(item)}  {colorize_title(item.title)}"
             if item.category:
                 line = right_anchor(line, category_chip(item), width)
@@ -277,6 +282,9 @@ def _run_search_state_machine(initial_query: str, cfg: AnirssConfig,
                 state = "search"
                 continue
             query, selected = initial_query, items
+            # Feeds without tracker stats (erai) get them scraped from the
+            # torrents' trackers — what qBittorrent would show after adding.
+            selected = stats_mod.enrich(items)
             state = "refine"
             continue
         if state == "refine":
@@ -388,11 +396,15 @@ def _run_noninteractive(parsed: ParsedArgs, cfg: AnirssConfig, eps: EndpointStat
         do_download(qbt, links, default_name, _save_base_for(parsed, cfg),
                     tags=_tags_for(cfg))
     elif parsed.download_n is not None:
+        # "Top N" ranks by downloads — scrape real counts first when the
+        # feed didn't carry them (otherwise every rank is a fake tie at 0).
+        items = stats_mod.enrich(items)
         chosen = _pick_top_n(items, parsed.download_n)
         links = [it.link for it in chosen]
         do_download(qbt, links, default_name, _save_base_for(parsed, cfg),
                     tags=_tags_for(cfg))
     elif parsed.movie:
+        items = stats_mod.enrich(items)
         top = _pick_top_n(items, 1)[0]
         do_movie(qbt, top.title, top.link, cfg["downloads"]["movie_path"],
                  tags=_tags_for(cfg))
@@ -484,6 +496,7 @@ def _run_interactive(initial_query: str, force_url: str | None,
                     die(str(e))
                 if not items:
                     die(f"no items returned by {force_url}")
+                items = stats_mod.enrich(items)
                 print(f"{C_BLD}{len(items)} item(s):{C_OFF}")
                 show_titles(items, reserved_lines=_URL_FLOW_CHROME_LINES)
                 action = pick_action(len(items))

@@ -74,7 +74,8 @@ def test_parse_generic_feed_description_fallbacks():
     it = nyaa.parse_rss(ANIRENA_XML)[0]
     assert it.size == "485.1 MB"
     assert it.category == "Anime > Subs"
-    assert (it.seeders, it.leechers, it.downloads) == (0, 0, 0)
+    # AniRena carries no stat extensions: unknown, not zero.
+    assert (it.seeders, it.leechers, it.downloads) == (None, None, None)
 
 
 def test_parse_generic_feed_strips_category_title_prefix():
@@ -108,6 +109,21 @@ def test_parse_erai_feed_records_post_page():
     it = nyaa.parse_rss(ERAI_XML)[0]
     assert it.page == ("https://www.erai-raws.info/episodes/"
                        "gaikotsu-kishi-sama-tadaima-isekai-e-odekake-chuu-ii-02/")
+
+
+def test_parse_erai_feed_stats_are_unknown_not_zero():
+    # The erai: namespace has no seed/peer/download stats; they must stay
+    # None (rendered as –) so 0 never masquerades as a dead torrent.
+    it = nyaa.parse_rss(ERAI_XML)[0]
+    assert it.seeders is None and it.leechers is None and it.downloads is None
+
+
+def test_parse_rss_zero_stats_are_real_zeros():
+    # A feed that explicitly says 0 must keep 0 (dead torrent), not None.
+    xml = NYAA_XML.replace("<nyaa:seeders>923</nyaa:seeders>",
+                           "<nyaa:seeders>0</nyaa:seeders>")
+    it = nyaa.parse_rss(xml)[0]
+    assert it.seeders == 0 and it.leechers == 12 and it.downloads == 4051
 
 
 def test_parse_rss_bad_xml_raises_fetch_error():

@@ -9,7 +9,7 @@ from anirss_lib.ansi import (
     C_BLD, C_BLU, C_CYN, C_DIM, C_GRN, C_OFF, C_RED, C_YEL, PROMPT_FILTER,
     ansi_strip,
 )
-from anirss_lib import bestfit, endpoints as endpoints_mod, responsive, terminal
+from anirss_lib import bestfit, endpoints as endpoints_mod, responsive, stats as stats_mod, terminal
 from anirss_lib.cli.pickers import pick_endpoint
 from anirss_lib.config import BestfitConfig
 from anirss_lib.endpoints import EndpointState
@@ -108,6 +108,25 @@ def _members_of(selected: list[Item], token: str) -> frozenset[int]:
         i for i, item in enumerate(selected)
         if (token.startswith("[") and poster_of(item.title) == token)
         or (not token.startswith("[") and token in title_tokens(item.title))
+    )
+
+
+def _rss_active(state: EndpointState) -> bool:
+    """True when the active endpoint is a generic RSS search (Erai-raws,
+    AniRena, …). Their query engines are plain word-AND over post text, so
+    nyaa-shaped token refetches 0-out (e.g. s='Show 1080p WEB-DL Airing'
+    finds nothing); refinement filters the fetched results client-side
+    instead. nyaa keeps its server-side refetch, which can surface episodes
+    beyond the first RSS page."""
+    return state.active.kind != "nyaa"
+
+
+def _matches_all_tokens(item: Item, tokens: list[str]) -> bool:
+    poster = poster_of(item.title)
+    toks = title_tokens(item.title)
+    return all(
+        (poster == t) if t.startswith("[") else (t in toks)
+        for t in tokens
     )
 
 
@@ -390,6 +409,7 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
                       f"staying on {prev.name}{C_OFF}")
                 state.active = prev
                 continue
+            new_items = stats_mod.enrich(new_items)
             print(f"{C_YEL}switched to {new_ep.name}: {len(new_items)} result(s){C_OFF}")
             selected = new_items
             log("INFO", f"endpoint switch -> {new_ep.name}: {len(new_items)} results")
@@ -402,6 +422,24 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
             if not best_query:
                 continue
             print(f"{C_CYN}best fit:{C_OFF} {best_query}")
+            if _rss_active(state):
+                # No refetch: the rss word-AND engine can't match these
+                # tokens. Keep only the results sharing the best release's
+                # pinned profile (group / season / resolution / source / audio).
+                best = bestfit.best_item(selected, bestfit_cfg)
+                parts = bestfit.profile_parts(best)
+                kept = [it for it in selected
+                        if bestfit.matches_profile(it.title, parts)]
+                if not kept or len(kept) == len(selected):
+                    print(f"{C_YEL}best fit changes nothing here — skipped{C_OFF}")
+                    log("WARN", f"best-fit (client-side) {best_query!r}: no-op, reverted")
+                    continue
+                print(f"{C_YEL}filtered: {len(kept)} (was {len(selected)}, "
+                      f"{len(kept) - len(selected):+d}){C_OFF}")
+                query, selected = best_query, kept
+                log("INFO", f"after best-fit (client-side): {len(selected)} results, "
+                            f"query={query!r}")
+                continue
             print(f"{C_DIM}refetching {state.active.name} with {best_query!r}...{C_OFF}")
             try:
                 new_items = endpoints_mod.fetch_items(state.active, best_query)
@@ -411,6 +449,7 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
                 print(f"{C_YEL}best fit returns 0 results, skipped{C_OFF}")
                 log("WARN", f"best-fit {best_query!r} -> 0 results, reverted")
                 continue
+            new_items = stats_mod.enrich(new_items)
             delta = len(new_items) - len(selected)
             print(f"{C_YEL}{state.active.name} returned {len(new_items)} (was {len(selected)}, "
                   f"{delta:+d}){C_OFF}")
@@ -426,6 +465,14 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
                 log("WARN", f"custom filter {term!r}: 0 substring matches in current results")
                 continue
             new_query = add_term_to_query(query, term)
+            if _rss_active(state):
+                kept = [it for it in selected if term_lc in it.title.lower()]
+                print(f"{C_YEL}filtered: {len(kept)} (was {len(selected)}, "
+                      f"{len(kept) - len(selected):+d}){C_OFF}")
+                query, selected = new_query, kept
+                log("INFO", f"after custom {term!r} (client-side): "
+                            f"{len(selected)} results, query={query!r}")
+                continue
             print(f"{C_DIM}refetching {state.active.name} with {new_query!r}...{C_OFF}")
             try:
                 new_items = endpoints_mod.fetch_items(state.active, new_query)
@@ -435,6 +482,7 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
                 print(f"{C_YEL}filter would yield 0 results — skipped{C_OFF}")
                 log("WARN", f"after custom {term!r}: 0 results — reverted")
                 continue
+            new_items = stats_mod.enrich(new_items)
             removed = len(selected) - len(new_items)
             print(f"{C_YEL}filtered: {state.active.name} returned {len(new_items)} (was {len(selected)}, "
                   f"{removed:+d}){C_OFF}")
@@ -447,6 +495,15 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
             if new_query == query:
                 print(f"{C_DIM}empty, skipped{C_OFF}")
                 continue
+            if _rss_active(state):
+                term_lc = term.lower()
+                kept = [it for it in selected if term_lc not in it.title.lower()]
+                print(f"{C_YEL}filtered: {len(kept)} (was {len(selected)}, "
+                      f"{len(kept) - len(selected):+d}){C_OFF}")
+                query, selected = new_query, kept
+                log("INFO", f"after exclude {term!r} (client-side): "
+                            f"{len(selected)} results, query={query!r}")
+                continue
             print(f"{C_DIM}refetching {state.active.name} with {new_query!r}...{C_OFF}")
             try:
                 new_items = endpoints_mod.fetch_items(state.active, new_query)
@@ -456,6 +513,7 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
                 print(f"{C_YEL}exclude would yield 0 results — skipped{C_OFF}")
                 log("WARN", f"after exclude {term!r}: 0 results — reverted")
                 continue
+            new_items = stats_mod.enrich(new_items)
             removed = len(selected) - len(new_items)
             print(f"{C_YEL}excluded: {state.active.name} returned {len(new_items)} (was {len(selected)}, "
                   f"{removed:+d}){C_OFF}")
@@ -463,11 +521,26 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
             log("INFO", f"after exclude {term!r}: {len(selected)} results, query={query!r}")
             continue
 
-        # Picking a token refetches nyaa with the extended query (like the
-        # custom/exclude paths) instead of filtering the already-fetched page.
-        # The first RSS page only holds the most-recent matches, so a narrower
-        # query surfaces episodes the broad search never returned.
+        # Picking a token normally refetches with the extended query (like
+        # the custom/exclude paths) instead of filtering the already-fetched
+        # page — the first RSS page only holds the most-recent matches, so a
+        # narrower query surfaces episodes the broad search never returned.
+        # Generic rss endpoints (Erai-raws, …) can't take those tokens
+        # server-side; see _rss_active.
         new_query = build_refined_query(query, pick.tokens, selected)
+        if _rss_active(state):
+            kept = [it for it in selected
+                    if _matches_all_tokens(it, pick.tokens)]
+            if not kept or kept == selected:
+                print(f"{C_YEL}that filter changes nothing — skipped{C_OFF}")
+                log("WARN", f"tokens {pick.tokens!r}: client-side no-op — skipped")
+                continue
+            print(f"{C_YEL}filtered: {len(kept)} (was {len(selected)}, "
+                  f"{len(kept) - len(selected):+d}){C_OFF}")
+            query, selected = new_query, kept
+            log("INFO", f"after pick {pick.tokens!r} (client-side): "
+                        f"{len(selected)} results, query={query!r}")
+            continue
         print(f"{C_DIM}refetching {state.active.name} with {new_query!r}...{C_OFF}")
         try:
             new_items = endpoints_mod.fetch_items(state.active, new_query)
@@ -477,6 +550,7 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
             print(f"{C_YEL}that filter returns 0 results — skipped{C_OFF}")
             log("WARN", f"tokens {pick.tokens!r} → 0 results — skipped")
             continue
+        new_items = stats_mod.enrich(new_items)
         delta = len(new_items) - len(selected)
         print(f"{C_YEL}{state.active.name} returned {len(new_items)} (was {len(selected)}, "
               f"{delta:+d}){C_OFF}")

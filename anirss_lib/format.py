@@ -68,6 +68,15 @@ def _grade_downloads(downloads: int) -> str:
     return C_DIM
 
 
+def _stat_num(value: int | None, width: int) -> str:
+    """A right-aligned stat number, or a dim dash when unknown. Unknown is
+    rendered as such (feeds like Erai-raws carry no tracker stats) — never
+    as 0, which would read as a dead torrent."""
+    if value is None:
+        return f"{C_DIM}{'–':>{width}}{C_OFF}"
+    return f"{value:>{width}}"
+
+
 def format_stats(item: Item) -> str:
     """One-line colored stats: 530 dl · 45s/5l · 926.7 MiB.
 
@@ -78,13 +87,20 @@ def format_stats(item: Item) -> str:
     from anirss_lib import responsive  # local to break import cycle
     parts: list[str] = []
     if responsive.show("downloads"):
-        dl_c = _grade_downloads(item.downloads)
-        parts.append(f"{dl_c}{item.downloads:>5} dl{C_OFF}")
+        if item.downloads is None:
+            parts.append(f"{C_DIM}{'–':>5} dl{C_OFF}")
+        else:
+            dl_c = _grade_downloads(item.downloads)
+            parts.append(f"{dl_c}{item.downloads:>5} dl{C_OFF}")
     if responsive.show("seeders"):
-        s_c = _grade_seeders(item.seeders)
-        seed = f"{s_c}{item.seeders:>4}{C_OFF}{C_DIM}s{C_OFF}"
+        seed = f"{_stat_num(item.seeders, 4)}{C_DIM}s{C_OFF}" \
+            if item.seeders is None \
+            else f"{_grade_seeders(item.seeders)}{item.seeders:>4}{C_OFF}{C_DIM}s{C_OFF}"
         if responsive.show("leechers"):
-            seed += f"/{C_RED}{item.leechers:>4}{C_OFF}{C_DIM}l{C_OFF}"
+            if item.leechers is None:
+                seed += f"/{C_DIM}{'–':>4}{C_OFF}{C_DIM}l{C_OFF}"
+            else:
+                seed += f"/{C_RED}{item.leechers:>4}{C_OFF}{C_DIM}l{C_OFF}"
         parts.append(seed)
     if item.size and responsive.show("size"):
         parts.append(f"{C_DIM}{item.size:>10}{C_OFF}")
