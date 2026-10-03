@@ -132,7 +132,10 @@ def fetch_rss(url: str, endpoint_name: str = "feed") -> list[Item]:
         "Accept": "application/rss+xml, application/xml, text/xml, */*",
     })
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        # 10s, not urllib's usual generous default: a blackholed endpoint
+        # (nyaa is silently dropped by some networks) must fail fast so the
+        # fallback probe can move on instead of feeling like a hang.
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = resp.read()
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise FetchError(f"can't reach {endpoint_name}: {e}") from e
