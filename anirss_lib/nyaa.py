@@ -124,7 +124,13 @@ def parse_rss(data: bytes | str, endpoint_name: str = "feed") -> list[Item]:
 def fetch_rss(url: str, endpoint_name: str = "feed") -> list[Item]:
     """GET `url` and parse it as an RSS feed. Raises FetchError on failure."""
     log("INFO", f"GET {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": "anirss/1.0"})
+    # erai-raws (Cloudflare) 502s non-browser User-Agents like the old
+    # "anirss/1.0", so present as a stock Firefox.
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) "
+                      "Gecko/20100101 Firefox/130.0",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    })
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = resp.read()
