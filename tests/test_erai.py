@@ -1,6 +1,7 @@
 import urllib.parse
 
 from anirss_lib import endpoints, erai, nyaa
+from anirss_lib.ansi import C_DIM, C_OFF, ansi_strip
 from anirss_lib.endpoints import Endpoint
 from anirss_lib.types import Item
 
@@ -58,6 +59,32 @@ def test_matches_token_uses_metadata():
 
 def test_metadata_hit_ignores_items_without_erai_fields():
     assert not erai.metadata_hit(Item("Show 1080p WEB-DL", "l"), "1080p")
+
+
+HINT = "(dimmed = matched in feed metadata, not searched)"
+
+
+def test_render_query_dims_quality_tokens_on_erai():
+    out = erai.render_query("Ranma 1080p WEB-DL", ERAI_EP)
+    assert ansi_strip(out) == f"Ranma 1080p WEB-DL {HINT}"
+    assert f"{C_DIM}1080p{C_OFF}" in out
+    assert f"{C_DIM}WEB-DL{C_OFF}" in out
+
+
+def test_render_query_plain_when_nothing_to_dim():
+    q = "Ranma 3rd Season"
+    assert erai.render_query(q, ERAI_EP) == q
+
+
+def test_render_query_hint_suppressible():
+    out = erai.render_query("Ranma 1080p", ERAI_EP, hint=False)
+    assert HINT not in out
+    assert f"{C_DIM}1080p{C_OFF}" in out
+
+
+def test_render_query_verbatim_for_non_erai():
+    q = "show 1080p"
+    assert erai.render_query(q, NYAA_EP) == q
 
 
 def _s_param(url: str) -> str:

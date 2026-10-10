@@ -5,7 +5,7 @@ import os
 import sys
 
 import anirss_lib
-from anirss_lib import proctitle, responsive, terminal
+from anirss_lib import erai, proctitle, responsive, terminal
 from anirss_lib.ansi import (
     C_BLD, C_DIM, C_GRN, C_OFF, C_YEL, FILTER_PICKER_LINES,
     right_anchor,
@@ -258,7 +258,8 @@ def _run_search_state_machine(initial_query: str, cfg: AnirssConfig,
             state = "fetch"
             continue
         if state == "fetch":
-            print(f"{C_BLD}Query:{C_OFF} {initial_query}")
+            print(f"{C_BLD}Query:{C_OFF} "
+                  f"{erai.render_query(initial_query, eps.active)}")
             print(f"{C_DIM}fetching {eps.active.name}...{C_OFF}")
             prev_name = eps.active.name
             reason = "0 results"

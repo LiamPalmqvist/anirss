@@ -390,11 +390,11 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
         # Query line sits immediately above the picker so the user can see what
         # they're filtering against without scanning back to the top.
         print()
-        print(f"{C_BLD}Query:{C_OFF} {query}")
+        print(f"{C_BLD}Query:{C_OFF} {erai.render_query(query, state.active)}")
         # Capture the current frame so the SIGWINCH handler can repaint it.
         _CURRENT_FRAME = {
             "selected": selected,
-            "query": query,
+            "query": erai.render_query(query, state.active),
             "no_groups": not groups,
         }
         # Best fit's refetch query is computed up front: when it is empty the
@@ -439,7 +439,8 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
             # means the option was hidden, so this is unreachable then.
             if not best_query:
                 continue
-            print(f"{C_CYN}best fit:{C_OFF} {best_query}")
+            print(f"{C_CYN}best fit:{C_OFF} "
+                  f"{erai.render_query(best_query, state.active, hint=False)}")
             if _rss_active(state):
                 # No refetch: the rss word-AND engine can't match these
                 # tokens. Keep only the results sharing the best release's
@@ -576,5 +577,6 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
         log("INFO", f"after pick {pick.tokens!r}: {len(selected)} results, query={query!r}")
 
     print()
-    print(f"{C_GRN}{C_BLD}Final query:{C_OFF} {query}")
+    print(f"{C_GRN}{C_BLD}Final query:{C_OFF} "
+          f"{erai.render_query(query, state.active)}")
     return query, selected, "done"

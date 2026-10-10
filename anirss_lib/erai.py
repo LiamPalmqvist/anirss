@@ -22,6 +22,7 @@ import re
 import urllib.parse
 
 from anirss_lib import nyaa
+from anirss_lib.ansi import C_DIM, C_OFF
 from anirss_lib.endpoints import FIELD_RE, Endpoint
 from anirss_lib.logging import log
 from anirss_lib.types import Item
@@ -71,6 +72,15 @@ _QUALITY_RE = re.compile(
     r")$", re.IGNORECASE)
 
 
+def is_quality_token(field: str) -> bool:
+    """Is this query field a quality facet (see _QUALITY_RE)? A leading `-`
+    and quotes are stripped before the whole-token check."""
+    core = field.removeprefix("-")
+    if len(core) >= 2 and core[0] == '"' and core[-1] == '"':
+        core = core[1:-1]
+    return bool(core) and bool(_QUALITY_RE.fullmatch(core))
+
+
 def split_noise(query: str) -> tuple[str, list[str]]:
     """(searchable terms, quality tokens) from a positive-terms query.
 
@@ -82,14 +92,27 @@ def split_noise(query: str) -> tuple[str, list[str]]:
     terms: list[str] = []
     quality: list[str] = []
     for field in FIELD_RE.findall(query):
-        core = field.removeprefix("-")
-        if len(core) >= 2 and core[0] == '"' and core[-1] == '"':
-            core = core[1:-1]
-        if core and _QUALITY_RE.fullmatch(core):
-            quality.append(core)
+        if is_quality_token(field):
+            quality.append(field.strip('"'))
             continue
         terms.append(field)
     return " ".join(terms), quality
+
+
+def render_query(query: str, ep: Endpoint, *, hint: bool = True) -> str:
+    """The Query line as displayed on erai endpoints: quality facets dimmed
+    — they never reach the s= search (that would zero it out), they match
+    the erai: metadata client-side — with a hint saying so whenever any
+    field is dimmed. Other endpoints get the query verbatim."""
+    if not is_erai(ep):
+        return query
+    fields = FIELD_RE.findall(query)
+    out = [f"{C_DIM}{f}{C_OFF}" if is_quality_token(f) else f
+           for f in fields]
+    if out != fields and hint:
+        out.append(f"{C_DIM}(dimmed = matched in feed metadata, "
+                   f"not searched){C_OFF}")
+    return " ".join(out)
 
 
 def metadata_hit(item: Item, token: str) -> bool:
