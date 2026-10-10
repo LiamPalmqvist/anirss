@@ -1,20 +1,28 @@
-"""Erai-raws specifics: resolving a show's anime-list feed for subscriptions.
+"""Erai-raws specifics: search-term hygiene and per-show feed resolution.
 
-The search endpoint (WordPress `s=` on the tokenized feed) is plain `rss`
-kind; nothing here touches searching. What Erai adds beyond a generic feed is
-a per-show feed at /anime-list/<slug>/feed/ that carries only that show's
-current offerings. Subscribing to it (instead of the search feed) keeps the
-qBittorrent feed small and immune to search-term drift. The show slug is
-derived from the release post URL each feed item links to, then validated
-with a single fetch: a wrong slug returns HTTP 200 with an empty feed, so an
-empty probe means "fall back to the search feed", never a hard failure.
+Erai's search endpoint (WordPress `s=` on the tokenized feed) is a plain
+word-AND over post text — and the posts are titled "Show - 02 (NF)", with no
+quality tags at all. A query like "Show 1080p WEB-DL" therefore zeroes the
+search out: the quality facets live in the feed's erai: metadata instead
+(erai:resolution, erai:infomkv, erai:linktype). split_noise() strips those
+tokens from a query before it goes on the wire and matches_token() applies
+them to the fetched results client-side, so the endpoint is searched with
+the normal thing and the facets still narrow the results.
+
+Beyond that, what Erai adds over a generic feed is a per-show feed at
+/anime-list/<slug>/feed/ that carries only that show's current offerings.
+Subscribing to it (instead of the search feed) keeps the qBittorrent feed
+small and immune to search-term drift. The show slug is derived from the
+release post URL each feed item links to, then validated with a single
+fetch: a wrong slug returns HTTP 200 with an empty feed, so an empty probe
+means "fall back to the search feed", never a hard failure.
 """
 
 import re
 import urllib.parse
 
 from anirss_lib import nyaa
-from anirss_lib.endpoints import Endpoint
+from anirss_lib.endpoints import FIELD_RE, Endpoint
 from anirss_lib.logging import log
 from anirss_lib.types import Item
 
@@ -44,6 +52,71 @@ _POST_SUFFIX = {
 
 def is_erai(ep: Endpoint) -> bool:
     return ep.kind == "rss" and _HOST in ep.url
+
+
+# Quality facets Erai keeps in erai:resolution / erai:infomkv / erai:linktype
+# / erai:category metadata instead of the post text its s= search matches —
+# the posts are titled "Show - 02 (NF)", so s="Show 1080p" finds nothing.
+# Whole-token only: "1080p" is stripped from a query, "NF" (a real post-text
+# platform tag) is not.
+_QUALITY_RE = re.compile(
+    r"^(?:"
+    r"\d{3,4}p"                                # 1080p
+    r"|web[\s._-]?(?:dl|rip)?"                 # WEB-DL / WEBRip / WEB
+    r"|blu[\s._-]?ray|bd[\s._-]?(?:rip|mv)?"   # BluRay / BDRip / BD
+    r"|hdtv|dvd"
+    r"|avc|hevc|x[\s._-]?26[45]|h[\s._-]?26[45]|av1"
+    r"|aac|flac|mp3|e?ac3|dts"
+    r"|airing|encoded|batch"                   # erai:category values
+    r")$", re.IGNORECASE)
+
+
+def split_noise(query: str) -> tuple[str, list[str]]:
+    """(searchable terms, quality tokens) from a positive-terms query.
+
+    The quality tokens are the facets Erai exposes as erai: metadata; the
+    s= search only matches post text, so sending them zeroes it out. They
+    come back for client-side filtering (matches_all) instead. Quoted
+    phrases survive — they never match the whole-token pattern.
+    """
+    terms: list[str] = []
+    quality: list[str] = []
+    for field in FIELD_RE.findall(query):
+        core = field.removeprefix("-")
+        if len(core) >= 2 and core[0] == '"' and core[-1] == '"':
+            core = core[1:-1]
+        if core and _QUALITY_RE.fullmatch(core):
+            quality.append(core)
+            continue
+        terms.append(field)
+    return " ".join(terms), quality
+
+
+def metadata_hit(item: Item, token: str) -> bool:
+    """Does `token` match the item's structured erai fields? resolution /
+    category / linktype by equality, infomkv by substring. False for items
+    without erai metadata (all fields empty), so nyaa and generic feeds are
+    unaffected."""
+    if not (item.resolution or item.infomkv or item.linktype):
+        return False
+    lc = token.lower()
+    return (lc == item.resolution.lower()
+            or lc in item.infomkv.lower()
+            or lc == item.linktype.lower()
+            or lc == item.category.lower())
+
+
+def matches_token(item: Item, token: str) -> bool:
+    """Client-side facet match for one item: title text first, then the
+    structured erai fields — the polished title drops the linktype prefix,
+    so e.g. 'Torrent' only exists there."""
+    lc = token.lower()
+    return lc in item.title.lower() or metadata_hit(item, lc)
+
+
+def matches_all(item: Item, tokens: list[str]) -> bool:
+    """Every token matches (see matches_token)."""
+    return all(matches_token(item, t) for t in tokens)
 
 
 def _show_slug(section: str, post_slug: str) -> str | None:

@@ -54,18 +54,22 @@ def _item_link(entry: ET.Element, link_text: str) -> str:
     return link_text
 
 
-def _erai_polish(entry: ET.Element, title: str) -> tuple[str, str, str, str]:
-    """(title, size, category, page) for an Erai-raws feed item, or the title
-    untouched with empty extras when the item has no erai: extensions.
+def _erai_polish(entry: ET.Element, title: str
+                 ) -> tuple[str, str, str, str, str, str, str]:
+    """(title, size, category, page, resolution, infomkv, linktype) for an
+    Erai-raws feed item, or the title untouched with empty extras when the
+    item has no erai: extensions.
 
     Erai titles read "[Torrent] Show - 02 [tags][us][br]...[Airing]": the
     linktype prefix and the subtitle-language run are noise (the languages
     live in erai:subtitles), while the trailing [Airing]/[Encoded]/[Batch]
     tag is kept as a real refine facet. The post URL from <description>
-    becomes Item.page so the per-show feed slug can be derived from it."""
+    becomes Item.page so the per-show feed slug can be derived from it.
+    resolution/infomkv/linktype are the structured quality facets — they
+    exist because the s= search can't match them (see erai.split_noise)."""
     linktype = _str_text(entry.find("erai:linktype", ERAI_NS))
     if not linktype:
-        return title, "", "", ""
+        return title, "", "", "", "", "", ""
     if title.startswith(f"[{linktype}] "):
         title = title[len(linktype) + 3:]
     subs_tags = _str_text(entry.find("erai:subtitles", ERAI_NS))
@@ -73,8 +77,11 @@ def _erai_polish(entry: ET.Element, title: str) -> tuple[str, str, str, str]:
         title = title.replace(subs_tags, "")
     size = _str_text(entry.find("erai:size", ERAI_NS))
     category = _str_text(entry.find("erai:category", ERAI_NS)).strip("[]")
+    resolution = _str_text(entry.find("erai:resolution", ERAI_NS))
+    infomkv = _str_text(entry.find("erai:infomkv", ERAI_NS))
     href = _HREF_RE.search(_str_text(entry.find("description")))
-    return title, size, category, href.group(1) if href else ""
+    return title, size, category, href.group(1) if href else "", \
+        resolution, infomkv, linktype
 
 
 def parse_rss(data: bytes | str, endpoint_name: str = "feed") -> list[Item]:
@@ -92,7 +99,8 @@ def parse_rss(data: bytes | str, endpoint_name: str = "feed") -> list[Item]:
         if title is None or not title.text or link is None or not link.text:
             continue
         title_text = title.text.strip()
-        title_text, erai_size, erai_cat, page = _erai_polish(entry, title_text)
+        title_text, erai_size, erai_cat, page, resolution, infomkv, linktype = \
+            _erai_polish(entry, title_text)
         size = _str_text(entry.find("nyaa:size", NYAA_NS)) or erai_size
         category = _str_text(entry.find("nyaa:category", NYAA_NS)) or erai_cat
         if not size or not category:
@@ -117,6 +125,9 @@ def parse_rss(data: bytes | str, endpoint_name: str = "feed") -> list[Item]:
             size=size,
             category=category,
             page=page,
+            resolution=resolution,
+            infomkv=infomkv,
+            linktype=linktype,
         ))
     return out
 

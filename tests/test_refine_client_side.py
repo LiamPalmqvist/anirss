@@ -110,3 +110,20 @@ def test_rss_token_pick_that_changes_nothing_is_skipped(monkeypatch):
     assert status == "done"
     assert len(selected) == len(ITEMS)
     assert fetches == []
+
+
+def test_rss_token_pick_matches_erai_metadata(monkeypatch):
+    # 'Torrent' never appears in a polished erai title (the linktype prefix
+    # is stripped at parse time) — it only exists in erai:linktype metadata.
+    meta_items = [
+        Item("Show - 01 [1080p]", "l1", linktype="Torrent"),
+        Item("Show - 02 [1080p]", "l2", linktype="Torrent"),
+        Item("Show - 03 [1080p]", "l3", linktype="Magnet"),
+    ]
+    state = EndpointState([ERAI, NYAA])
+    from anirss_lib.types import Pick
+    _query, selected, status, fetches = _run(
+        monkeypatch, state, [Pick("tokens", ["Torrent"])], items=meta_items)
+    assert status == "done"
+    assert [it.link for it in selected] == ["l1", "l2"]
+    assert fetches == []

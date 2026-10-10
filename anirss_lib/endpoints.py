@@ -110,38 +110,58 @@ def split_exclusions(query: str) -> tuple[str, list[str]]:
     return " ".join(positive), excluded
 
 
+def _erai_split(ep: Endpoint, positive: str) -> tuple[str, list[str]]:
+    """Erai's s= search matches post text only; the quality facets (1080p,
+    WEB-DL, …) live in the erai: metadata and would zero the search out, so
+    they're stripped from the terms here and returned for client-side
+    filtering (erai.split_noise). Other endpoints pass through untouched."""
+    if ep.kind == "rss":
+        from anirss_lib import erai
+        if erai.is_erai(ep):
+            return erai.split_noise(positive)
+    return positive, []
+
+
 def feed_url(ep: Endpoint, query: str) -> tuple[str, list[str]]:
     """URL to persist as a qBittorrent RSS feed for `query`, plus the
     exclusion terms that could not be encoded into it. nyaa understands
     -tag exclusions server-side, so they stay in the URL; generic rss
     endpoints get only the positive terms and the exclusions are returned
-    for the caller to enforce via the qB rule instead."""
+    for the caller to enforce via the qB rule instead. erai additionally
+    loses its quality tokens (they'd zero the s= search out — the caller
+    puts them back via mustContain if it needs them)."""
     if ep.kind == "nyaa":
         return search_url(ep, query), []
     positive, excluded = split_exclusions(query)
+    positive, _ = _erai_split(ep, positive)
     return search_url(ep, positive), excluded
 
 
 def subscription_feed(ep: Endpoint, query: str, items: list[Item]
                       ) -> tuple[str, str, list[str]]:
-    """(feed_url, must_contain, excluded) to persist as a qB subscription.
+    """(feed_url, mustContain, excluded) to persist as a qB subscription.
 
     Erai endpoints subscribe to the per-show anime-list feed when the slug
     can be resolved from `items` (see erai.resolve_show_feed); the positive
     query terms then move into the rule's mustContain since the per-show URL
     no longer encodes the search. Quoted phrases are unwrapped and poster
     fields dropped: qB matches whitespace-separated tokens against the raw
-    feed titles, which carry no [group] poster. Every other endpoint keeps
-    the feed_url() behavior with an empty mustContain."""
+    feed titles, which carry no [group] poster. When the slug can't be
+    resolved, the search feed is used with only the searchable terms on the
+    wire and the quality tokens (which would zero the s= search out) moved
+    into mustContain as well. Every other endpoint keeps the feed_url()
+    behavior with an empty mustContain."""
     from anirss_lib import erai
     if erai.is_erai(ep):
         per_show = erai.resolve_show_feed(ep, items)
+        positive, excluded = split_exclusions(query)
         if per_show:
-            positive, excluded = split_exclusions(query)
             must = " ".join(
                 field.strip('"') for field in FIELD_RE.findall(positive)
                 if not field.startswith("["))
             return per_show, must, excluded
+        positive, quality = _erai_split(ep, positive)
+        return search_url(ep, positive), " ".join(quality), excluded
     url, excluded = feed_url(ep, query)
     return url, "", excluded
 
@@ -159,9 +179,16 @@ def fetch_items(ep: Endpoint, query: str) -> list[Item]:
     """Fetch `query` from `ep`. Raises nyaa.FetchError on network/parse errors."""
     if ep.kind == "nyaa":
         return nyaa.fetch_rss(search_url(ep, query), ep.name)
+    from anirss_lib import erai
     positive, excluded = split_exclusions(query)
+    positive, quality = _erai_split(ep, positive)
     items = nyaa.fetch_rss(search_url(ep, positive), ep.name)
-    return filter_excluded(items, excluded)
+    items = filter_excluded(items, excluded)
+    if quality:
+        # The quality facets can't be searched server-side (they'd zero the
+        # s= search out); they narrow the results here instead.
+        items = [it for it in items if erai.matches_all(it, quality)]
+    return items
 
 
 def probe_fallback(state: EndpointState, query: str, fetch=None

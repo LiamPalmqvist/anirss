@@ -9,7 +9,14 @@ from anirss_lib.ansi import (
     C_BLD, C_BLU, C_CYN, C_DIM, C_GRN, C_OFF, C_RED, C_YEL, PROMPT_FILTER,
     ansi_strip,
 )
-from anirss_lib import bestfit, endpoints as endpoints_mod, responsive, stats as stats_mod, terminal
+from anirss_lib import (
+    bestfit,
+    endpoints as endpoints_mod,
+    erai,
+    responsive,
+    stats as stats_mod,
+    terminal,
+)
 from anirss_lib.cli.pickers import pick_endpoint
 from anirss_lib.config import BestfitConfig
 from anirss_lib.endpoints import EndpointState
@@ -107,7 +114,9 @@ def _members_of(selected: list[Item], token: str) -> frozenset[int]:
     return frozenset(
         i for i, item in enumerate(selected)
         if (token.startswith("[") and poster_of(item.title) == token)
-        or (not token.startswith("[") and token in title_tokens(item.title))
+        or (not token.startswith("[")
+            and (token in title_tokens(item.title)
+                 or erai.metadata_hit(item, token)))
     )
 
 
@@ -116,8 +125,9 @@ def _rss_active(state: EndpointState) -> bool:
     AniRena, …). Their query engines are plain word-AND over post text, so
     nyaa-shaped token refetches 0-out (e.g. s='Show 1080p WEB-DL Airing'
     finds nothing); refinement filters the fetched results client-side
-    instead. nyaa keeps its server-side refetch, which can surface episodes
-    beyond the first RSS page."""
+    instead (erai quality tokens are already stripped from the search
+    itself — see erai.split_noise). nyaa keeps its server-side refetch,
+    which can surface episodes beyond the first RSS page."""
     return state.active.kind != "nyaa"
 
 
@@ -125,9 +135,17 @@ def _matches_all_tokens(item: Item, tokens: list[str]) -> bool:
     poster = poster_of(item.title)
     toks = title_tokens(item.title)
     return all(
-        (poster == t) if t.startswith("[") else (t in toks)
+        (poster == t) if t.startswith("[")
+        else (t in toks or erai.metadata_hit(item, t))
         for t in tokens
     )
+
+
+def _custom_hit(item: Item, term_lc: str) -> bool:
+    """Custom-term match: title substring, plus erai's structured fields
+    (the polished title drops the linktype, so 'Torrent' only exists there;
+    items without erai metadata match on the title alone)."""
+    return term_lc in item.title.lower() or erai.metadata_hit(item, term_lc)
 
 
 def compute_groups(selected: list[Item]) -> list[Group]:
@@ -459,14 +477,14 @@ def _refine_loop(query: str, selected: list[Item], state: EndpointState,
         if pick.kind == "custom":
             term = pick.tokens[0]
             term_lc = term.lower()
-            hits = sum(1 for item in selected if term_lc in item.title.lower())
+            hits = sum(1 for item in selected if _custom_hit(item, term_lc))
             if hits == 0:
                 print(f"{C_YEL}no titles contain {term!r} — ignored{C_OFF}")
                 log("WARN", f"custom filter {term!r}: 0 substring matches in current results")
                 continue
             new_query = add_term_to_query(query, term)
             if _rss_active(state):
-                kept = [it for it in selected if term_lc in it.title.lower()]
+                kept = [it for it in selected if _custom_hit(it, term_lc)]
                 print(f"{C_YEL}filtered: {len(kept)} (was {len(selected)}, "
                       f"{len(kept) - len(selected):+d}){C_OFF}")
                 query, selected = new_query, kept

@@ -68,7 +68,10 @@ filter = "0"
 # token from their RSS page). anirss recognizes erai feeds and cleans up the
 # titles, and subscribing registers the show's own /anime-list/<slug>/feed/
 # in qBittorrent (validated with one request; falls back to this search URL)
-# with the query enforced via the rule's mustContain:
+# with the query enforced via the rule's mustContain. Quality tokens (1080p,
+# WEB-DL, AVC, …) are never sent to the search — Erai's `s=` only matches
+# post text and would return nothing — they filter the results client-side
+# using the feed's erai:resolution/infomkv/linktype metadata:
 #[[endpoint]]
 #name = "erai"
 #kind = "rss"

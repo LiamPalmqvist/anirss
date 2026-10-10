@@ -1,4 +1,4 @@
-import pytest
+import urllib.parse
 
 from anirss_lib import endpoints, erai, nyaa
 from anirss_lib.endpoints import Endpoint
@@ -23,6 +23,89 @@ def _erai_items():
 def test_is_erai():
     assert erai.is_erai(ERAI_EP) is True
     assert erai.is_erai(NYAA_EP) is False
+
+
+def test_split_noise_strips_quality_tokens():
+    terms, quality = erai.split_noise(
+        "Ranma 3rd Season 1080p WEB-DL AVC AAC")
+    assert terms == "Ranma 3rd Season"
+    assert quality == ["1080p", "WEB-DL", "AVC", "AAC"]
+
+
+def test_split_noise_keeps_searchable_text():
+    # Platform tags ("NF") are real post text; a year is not a resolution;
+    # quoted phrases never match the whole-token pattern.
+    terms, quality = erai.split_noise('Ranma NF 2024 "Multi Subs"')
+    assert terms == 'Ranma NF 2024 "Multi Subs"'
+    assert quality == []
+
+
+def test_split_noise_strips_category_tokens():
+    terms, quality = erai.split_noise("Ranma Airing")
+    assert terms == "Ranma"
+    assert quality == ["Airing"]
+
+
+def test_matches_token_uses_metadata():
+    item = Item("Ranma - 01 [Airing]", "l", resolution="1080p",
+                infomkv="NF WEB-DL AVC AAC", linktype="Torrent")
+    assert erai.matches_token(item, "torrent")   # linktype (stripped from titles)
+    assert erai.matches_token(item, "web-dl")    # infomkv
+    assert erai.matches_token(item, "1080p")     # resolution
+    assert erai.matches_token(item, "airing")    # title text
+    assert not erai.matches_token(item, "hevc")
+
+
+def test_metadata_hit_ignores_items_without_erai_fields():
+    assert not erai.metadata_hit(Item("Show 1080p WEB-DL", "l"), "1080p")
+
+
+def _s_param(url: str) -> str:
+    """The value of the s= search parameter (the only part a query can
+    pollute; the endpoint template's own res=/type= params are fixed)."""
+    for k, v in urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query):
+        if k == "s":
+            return v
+    return ""
+
+
+def test_feed_url_erai_strips_quality_tokens():
+    url, excluded = endpoints.feed_url(ERAI_EP, "Ranma 1080p WEB-DL -hevc")
+    assert _s_param(url) == "Ranma"
+    assert excluded == ["hevc"]
+
+
+def test_fetch_items_erai_searches_clean_and_filters_quality(monkeypatch):
+    urls = []
+
+    def fake_fetch_rss(url, endpoint_name="feed"):
+        urls.append(url)
+        return [
+            Item("Ranma - 01 [1080p NF WEB-DL AVC AAC][Airing]", "dl",
+                 resolution="1080p", infomkv="NF WEB-DL AVC AAC",
+                 linktype="Torrent"),
+            Item("Ranma - 01 (HEVC) [1080p NF WEBRip HEVC AAC][Encoded]",
+                 "rip", resolution="1080p", infomkv="NF WEBRip HEVC AAC",
+                 linktype="Torrent"),
+        ]
+
+    monkeypatch.setattr(nyaa, "fetch_rss", fake_fetch_rss)
+    items = endpoints.fetch_items(ERAI_EP, "Ranma 1080p WEB-DL")
+    # The search went out with the show name only — the quality tokens would
+    # zero it out — and the facet was applied to the results client-side.
+    assert _s_param(urls[0]) == "Ranma"
+    assert [it.link for it in items] == ["dl"]
+
+
+def test_subscription_feed_erai_fallback_puts_quality_in_must(monkeypatch):
+    monkeypatch.setattr(erai, "resolve_show_feed",
+                        lambda ep, items, fetch=None: None)
+    url, must, excluded = endpoints.subscription_feed(
+        ERAI_EP, "Ranma 1080p WEB-DL -hevc", [])
+    assert _s_param(url) == "Ranma"
+    # qB enforces the quality facets against the raw feed titles instead.
+    assert must == "1080p WEB-DL"
+    assert excluded == ["hevc"]
 
 
 def test_show_slug_per_section():

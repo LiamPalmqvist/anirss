@@ -15,6 +15,12 @@ class Item(NamedTuple):
     category: str = ""
     page: str = ""      # release post URL, when the feed exposes one (erai)
     source: str = ""    # endpoint these results fell back to ("" = the active one)
+    # Erai erai: namespace metadata (all empty for other feeds). The quality
+    # facets live here because Erai's s= search can't index them — see
+    # erai.split_noise.
+    resolution: str = ""   # erai:resolution ("1080p")
+    infomkv: str = ""      # erai:infomkv ("NF WEB-DL AVC AAC")
+    linktype: str = ""     # erai:linktype ("Torrent")
 
 
 class Group(NamedTuple):

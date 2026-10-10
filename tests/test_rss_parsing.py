@@ -111,6 +111,18 @@ def test_parse_erai_feed_records_post_page():
                        "gaikotsu-kishi-sama-tadaima-isekai-e-odekake-chuu-ii-02/")
 
 
+def test_parse_erai_feed_captures_quality_metadata():
+    it = nyaa.parse_rss(ERAI_XML)[0]
+    assert it.resolution == "1080p"
+    assert it.infomkv == "CR WEB-DL AVC AAC"
+    assert it.linktype == "Torrent"
+
+
+def test_parse_generic_feed_has_no_erai_metadata():
+    for it in nyaa.parse_rss(ANIRENA_XML):
+        assert it.resolution == "" and it.infomkv == "" and it.linktype == ""
+
+
 def test_parse_erai_feed_stats_are_unknown_not_zero():
     # The erai: namespace has no seed/peer/download stats; they must stay
     # None (rendered as –) so 0 never masquerades as a dead torrent.
