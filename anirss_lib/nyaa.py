@@ -13,6 +13,13 @@ from anirss_lib.types import Item
 
 NYAA_NS = {"nyaa": "https://nyaa.si/xmlns/nyaa"}
 ERAI_NS = {"erai": "https://www.erai-raws.info/rss-page/"}
+TORZNAB_NS = {"torznab": "http://torznab.com/schemas/2015/feed"}
+
+# Newznab top-level category ids (Jackett/Prowlarr torznab feeds).
+_TORZNAB_CATEGORIES = {
+    "1": "Console", "2": "Movies", "3": "Audio", "4": "PC", "5": "TV",
+    "6": "XXX", "7": "Books", "8": "Other",
+}
 
 
 def _opt_int_text(elem: ET.Element | None) -> int | None:
@@ -31,6 +38,47 @@ def _str_text(elem: ET.Element | None) -> str:
     if elem is None or not elem.text:
         return ""
     return elem.text.strip()
+
+
+def _human_size(n: int) -> str:
+    """Bytes in nyaa's own notation ("284.7 MiB")."""
+    f = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if f < 1024.0 or unit == "TiB":
+            return f"{int(f)} B" if unit == "B" else f"{f:.1f} {unit}"
+        f /= 1024.0
+    return f"{n} B"
+
+
+def _torznab(entry: ET.Element) -> tuple[int | None, int | None, int | None,
+                                         str, str]:
+    """(seeders, leechers, grabs, size, category) from a torznab item, all
+    empty/None when the item has no torznab:attr elements. Torznab reports
+    peers as seeders + leechers."""
+    attrs: dict[str, str] = {}
+    for attr in entry.findall("torznab:attr", TORZNAB_NS):
+        name, value = attr.get("name"), attr.get("value")
+        if name and value is not None:
+            attrs.setdefault(name, value)
+    if not attrs:
+        return None, None, None, "", ""
+
+    def num(key: str) -> int | None:
+        try:
+            return int(attrs[key])
+        except (KeyError, ValueError):
+            return None
+
+    seeders, peers = num("seeders"), num("peers")
+    leechers = max(0, peers - seeders) \
+        if peers is not None and seeders is not None else None
+    size = ""
+    raw = _str_text(entry.find("size")) or attrs.get("size", "")
+    if raw.isdigit():
+        size = _human_size(int(raw))
+    category = _TORZNAB_CATEGORIES.get(attrs.get("category", "")[:1], "") \
+        if len(attrs.get("category", "")) == 4 else ""
+    return seeders, leechers, num("grabs"), size, category
 
 
 _DESC_SIZE_RE = re.compile(r"Size:\s*([\d.,]+\s*[KMGT]?i?B)", re.IGNORECASE)
@@ -98,8 +146,11 @@ def parse_rss(data: bytes | str, endpoint_name: str = "feed") -> list[Item]:
         title_text = title.text.strip()
         title_text, erai_size, erai_cat, page, resolution, infomkv, linktype = \
             _erai_polish(entry, title_text)
-        size = _str_text(entry.find("nyaa:size", NYAA_NS)) or erai_size
-        category = _str_text(entry.find("nyaa:category", NYAA_NS)) or erai_cat
+        tz_seeders, tz_leechers, tz_grabs, tz_size, tz_cat = _torznab(entry)
+        size = (_str_text(entry.find("nyaa:size", NYAA_NS)) or erai_size
+                or tz_size)
+        category = (_str_text(entry.find("nyaa:category", NYAA_NS))
+                    or erai_cat or tz_cat)
         if not size or not category:
             # CDATA descriptions arrive HTML-escaped (AniRena writes
             # "Anime &gt; Subs"), so unescape what the regexes pull out.
@@ -116,9 +167,12 @@ def parse_rss(data: bytes | str, endpoint_name: str = "feed") -> list[Item]:
         out.append(Item(
             title=title_text,
             link=_item_link(entry, link.text.strip()),
-            seeders=_opt_int_text(entry.find("nyaa:seeders", NYAA_NS)),
-            leechers=_opt_int_text(entry.find("nyaa:leechers", NYAA_NS)),
-            downloads=_opt_int_text(entry.find("nyaa:downloads", NYAA_NS)),
+            seeders=_opt_int_text(entry.find("nyaa:seeders", NYAA_NS))
+            if tz_seeders is None else tz_seeders,
+            leechers=_opt_int_text(entry.find("nyaa:leechers", NYAA_NS))
+            if tz_leechers is None else tz_leechers,
+            downloads=_opt_int_text(entry.find("nyaa:downloads", NYAA_NS))
+            if tz_grabs is None else tz_grabs,
             size=size,
             category=category,
             page=page,
@@ -129,7 +183,8 @@ def parse_rss(data: bytes | str, endpoint_name: str = "feed") -> list[Item]:
     return out
 
 
-def fetch_rss(url: str, endpoint_name: str = "feed") -> list[Item]:
+def fetch_rss(url: str, endpoint_name: str = "feed",
+              timeout: float = 10.0) -> list[Item]:
     """GET `url` and parse it as an RSS feed. Raises FetchError on failure."""
     log("INFO", f"GET {url}")
     # erai-raws (Cloudflare) 502s non-browser User-Agents like the old
@@ -140,10 +195,11 @@ def fetch_rss(url: str, endpoint_name: str = "feed") -> list[Item]:
         "Accept": "application/rss+xml, application/xml, text/xml, */*",
     })
     try:
-        # 10s, not urllib's usual generous default: a blackholed endpoint
-        # (nyaa is silently dropped by some networks) must fail fast so the
-        # fallback probe can move on instead of feeling like a hang.
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        # 10s by default, not urllib's usual generous one: a blackholed
+        # endpoint (nyaa is silently dropped by some networks) must fail fast
+        # so the fallback probe can move on instead of feeling like a hang.
+        # Endpoints that are slow by nature raise it via `timeout`.
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = resp.read()
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise FetchError(f"can't reach {endpoint_name}: {e}") from e

@@ -105,7 +105,7 @@ def test_feed_url_erai_strips_quality_tokens():
 def test_fetch_items_erai_searches_clean_and_filters_quality(monkeypatch):
     urls = []
 
-    def fake_fetch_rss(url, endpoint_name="feed"):
+    def fake_fetch_rss(url, endpoint_name="feed", timeout=10.0):
         urls.append(url)
         return [
             Item("Ranma - 01 [1080p NF WEB-DL AVC AAC][Airing]", "dl",

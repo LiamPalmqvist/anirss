@@ -1,6 +1,7 @@
 """Search endpoints: config validation, active-endpoint state, URL building,
 fetch dispatch, and the auto-fallback probe."""
 
+import os
 import re
 import urllib.parse
 from typing import NamedTuple
@@ -19,6 +20,27 @@ class Endpoint(NamedTuple):
     url: str
     category: str = "1_0"   # nyaa kind only
     filter: str = "0"       # nyaa kind only
+    # On-demand: shell commands that bring the endpoint's backing service up
+    # and down, plus a URL that answers 2xx once it is ready (see ondemand.py).
+    start: str = ""
+    stop: str = ""
+    ready: str = ""
+    timeout: float = 10.0
+    # Per-endpoint overrides of [downloads] / [qbittorrent].tags ("" / None
+    # = use the global value).
+    save_base: str = ""
+    movie_path: str = ""
+    tags: tuple[str, ...] | None = None
+
+    @property
+    def on_demand(self) -> bool:
+        return bool(self.start)
+
+    def owns_url(self, url: str) -> bool:
+        """True when `url` points at this endpoint's feed (everything in the
+        template before {query} matches)."""
+        base = self.url.split("{query}", 1)[0]
+        return bool(base) and url.startswith(base)
 
 
 def load_endpoints(cfg) -> list[Endpoint]:
@@ -44,9 +66,31 @@ def load_endpoints(cfg) -> list[Endpoint]:
             raise ConfigError(f"[[endpoint]] {name!r}: missing `url`")
         if kind == "rss" and "{query}" not in url:
             raise ConfigError(f"[[endpoint]] {name!r}: rss url must contain a {{query}} placeholder")
+        start = str(raw.get("start") or "").strip()
+        ready = str(raw.get("ready") or "").strip()
+        if start and not ready:
+            raise ConfigError(f"[[endpoint]] {name!r}: `start` needs a `ready` URL to wait on")
+        tags = raw.get("tags")
+        if tags is not None and not isinstance(tags, list):
+            raise ConfigError(f"[[endpoint]] {name!r}: `tags` must be a list")
+        default_timeout = 60.0 if start else 10.0
+        try:
+            timeout = float(raw.get("timeout") or default_timeout)
+        except (TypeError, ValueError):
+            raise ConfigError(f"[[endpoint]] {name!r}: `timeout` must be a number of seconds")
         out.append(Endpoint(name=name, kind=kind, url=url,
                             category=str(raw.get("category") or "1_0"),
-                            filter=str(raw.get("filter") or "0")))
+                            filter=str(raw.get("filter") or "0"),
+                            start=start,
+                            stop=str(raw.get("stop") or "").strip(),
+                            ready=ready,
+                            timeout=timeout,
+                            save_base=os.path.expanduser(
+                                str(raw.get("save_base") or "")),
+                            movie_path=os.path.expanduser(
+                                str(raw.get("movie_path") or "")),
+                            tags=None if tags is None
+                            else tuple(str(t) for t in tags)))
     if not out:
         raise ConfigError("no [[endpoint]] configured")  # load_config synthesizes, so: unreachable
     return out
@@ -194,14 +238,22 @@ def filter_excluded(items: list[Item], terms: list[str]) -> list[Item]:
             if not any(t in it.title.lower() for t in lc)]
 
 
-def fetch_items(ep: Endpoint, query: str) -> list[Item]:
-    """Fetch `query` from `ep`. Raises nyaa.FetchError on network/parse errors."""
+def fetch_items(ep: Endpoint, query: str, *, boot: bool = True) -> list[Item]:
+    """Fetch `query` from `ep`. Raises nyaa.FetchError on network/parse errors.
+    An on-demand endpoint is started first when `boot`; without it, one
+    that isn't running already fails fast instead of starting."""
+    from anirss_lib import ondemand
+    if ep.on_demand:
+        if boot:
+            ondemand.ensure(ep)
+        elif not ondemand.usable(ep):
+            raise nyaa.FetchError(f"{ep.name}: not running")
     if ep.kind == "nyaa":
-        return nyaa.fetch_rss(search_url(ep, query), ep.name)
+        return nyaa.fetch_rss(search_url(ep, query), ep.name, ep.timeout)
     from anirss_lib import erai
     positive, excluded = split_exclusions(query)
     positive, quality = _erai_split(ep, positive)
-    items = nyaa.fetch_rss(search_url(ep, positive), ep.name)
+    items = nyaa.fetch_rss(search_url(ep, positive), ep.name, ep.timeout)
     items = filter_excluded(items, excluded)
     if quality:
         # The quality facets can't be searched server-side (they'd zero the
@@ -215,11 +267,16 @@ def probe_fallback(state: EndpointState, query: str, fetch=None
     """After the active endpoint came up empty or unreachable, try the other
     endpoints in priority order. First hit wins: state.active switches to it
     and its items are returned. Returns (items, per-endpoint notes); empty
-    items means nothing anywhere. `fetch` is injectable for tests."""
+    items means nothing anywhere. On-demand endpoints that aren't running
+    are skipped rather than started. `fetch` is injectable for tests."""
+    from anirss_lib import ondemand
     fetch = fetch or fetch_items
     notes: list[str] = []
     for ep in state.endpoints:
         if ep is state.active:
+            continue
+        if not ondemand.usable(ep):
+            notes.append(f"{ep.name}: off")
             continue
         try:
             items = fetch(ep, query)
@@ -235,3 +292,8 @@ def probe_fallback(state: EndpointState, query: str, fetch=None
             return [it._replace(source=ep.name) for it in items], notes
         notes.append(f"{ep.name}: 0")
     return [], notes
+
+
+def owner_of(endpoints: list[Endpoint], url: str) -> Endpoint | None:
+    """The configured endpoint whose feed `url` is, if any."""
+    return next((e for e in endpoints if e.owns_url(url)), None)

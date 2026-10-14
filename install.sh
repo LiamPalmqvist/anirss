@@ -149,6 +149,21 @@ if [ -f "$REPO_DIR/completions/anirss.bash" ]; then
     ok "bash completion -> $bash_dir/anirss"
 fi
 
+# --- systemd user timer for on-demand endpoints (best-effort) ---
+# Runs `anirss --refresh-on-demand` hourly; it exits at once when no
+# on-demand [[endpoint]] has subscriptions.
+if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+    unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    mkdir -p "$unit_dir"
+    sed "s|%h/.local/bin/anirss|$TARGET|" "$REPO_DIR/systemd/anirss-on-demand.service" \
+        > "$unit_dir/anirss-on-demand.service"
+    install -m 644 "$REPO_DIR/systemd/anirss-on-demand.timer" "$unit_dir/anirss-on-demand.timer"
+    systemctl --user daemon-reload
+    systemctl --user enable --now anirss-on-demand.timer >/dev/null 2>&1 \
+        && ok "anirss-on-demand.timer enabled (hourly)" \
+        || warn "couldn't enable anirss-on-demand.timer"
+fi
+
 # --- config: bootstrap on first install, migrate on updates ---
 mkdir -p "$CONFIG_DIR"
 if [ ! -f "$CONFIG_DIR/config.toml" ]; then
