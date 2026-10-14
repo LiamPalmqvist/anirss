@@ -1,5 +1,6 @@
 # Packaging metadata so other projects can depend on anirss:
-#   pip install "anirss @ git+https://github.com/marcusbandit/anirss"
+#   uv add git+https://github.com/marcusbandit/anirss          (Python projects)
+#   uv tool install git+https://github.com/marcusbandit/anirss (the `anirss` command)
 # The repo still needs no build step: ./anirss, install.sh, AUR and brew run
 # straight from the checkout and ignore this file.
 

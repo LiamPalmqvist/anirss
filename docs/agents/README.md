@@ -71,7 +71,9 @@ startup banner (it is colored human text): spawn
 `anirss --serve --port <chosen>` with `ANIRSS_API_TOKEN=<generated>` in its
 environment, then poll `GET /api/v1/health` until it returns 200.
 
-1. **Run the server.** `anirss --serve` (default `127.0.0.1:8787`; `--host`,
+1. **Run the server.** Get the command with
+   `uv tool install git+https://github.com/marcusbandit/anirss` (or any
+   existing install), then `anirss --serve` (default `127.0.0.1:8787`; `--host`,
    `--port`, or config `[server]`). For development, set `ANIRSS_API_TOKEN` so
    the token is stable, and add the dev server's origin to
    `[server].cors_origins` for browser clients. qBittorrent's password comes
@@ -126,7 +128,7 @@ every `error.type` in the mapping table has a handled path.
 
 ## B: Python library
 
-1. **Install.** `pip install "anirss @ git+https://github.com/marcusbandit/anirss"`
+1. **Install.** `uv add git+https://github.com/marcusbandit/anirss`
    (Python 3.11+, no runtime dependencies), or put a checkout on `sys.path`.
    Done when `from anirss_lib.api import Anirss` imports.
 2. **Construct one instance and share it.** `Anirss(config={...})` takes the

@@ -45,24 +45,28 @@ anirss uses `tomllib`, so it needs Python 3.11 or newer. The only
 non-Python tools it shells out to are optional CLI conveniences (fzf for the
 TUI); the library and server do not need them.
 
-Once the repo has a `pyproject.toml`:
+Install with [uv](https://docs.astral.sh/uv/). There are no runtime
+dependencies.
+
+For the HTTP route (any non-Python client, including Rust), only the `anirss`
+command has to exist on the machine that runs the server:
 
 ```
-pip install git+https://github.com/marcusbandit/anirss
+uv tool install git+https://github.com/marcusbandit/anirss   # puts `anirss` on PATH
+anirss --serve
 ```
 
-Until then, put a checkout on the import path:
+An existing AUR, brew, or `install.sh` install provides the same command.
 
-```python
-import sys
-sys.path.insert(0, "/path/to/anirss")   # the directory containing anirss_lib/
-from anirss_lib.api import Anirss
+For the Python route, add it to the consuming project:
+
+```
+uv add git+https://github.com/marcusbandit/anirss
 ```
 
-or set `PYTHONPATH=/path/to/anirss`. The package ships a `py.typed` marker.
-
-For the HTTP route you only need the `anirss` launcher on the machine that
-will run the server (`anirss --serve`).
+`uv add /path/to/anirss` works with a local checkout. Without an install, a
+checkout on the import path also works (`PYTHONPATH=/path/to/anirss`, the
+directory containing `anirss_lib/`). The package ships a `py.typed` marker.
 
 ## Python API
 

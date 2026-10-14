@@ -32,7 +32,7 @@ non-interactive operation suitable for scripts and cron.
 > third non-goals above were reversed once anirss had to be importable by
 > other apps and servable to a frontend. Library modules now raise
 > `anirss_lib.errors.AnirssError` and only `main()` turns it into `die()`;
-> a `pyproject.toml` exists so `pip install git+…` works. brew, AUR and
+> a `pyproject.toml` exists so `uv add git+…` / `uv tool install git+…` work. brew, AUR and
 > install.sh still run straight from the checkout with no build step.
 
 ## Constraints
