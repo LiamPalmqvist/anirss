@@ -33,6 +33,7 @@ ops=(
     '--no-seed:set qB to pause torrents at ratio 0'
     '--config:print resolved config and exit'
     '--migrate-config:append new default config sections'
+    '--serve:serve the JSON HTTP API (--host, --port)'
     '--version:print version'
     '-h:help'
     '--help:help'

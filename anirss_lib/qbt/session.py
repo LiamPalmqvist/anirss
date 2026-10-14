@@ -12,10 +12,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 
 from anirss_lib.ansi import C_BLD, C_CYN, C_GRN, C_OFF, C_RED, C_YEL
 from anirss_lib.config import PASS_PATH, QbtConfig, SID_PATH, STATE_DIR
-from anirss_lib.logging import die, log
+from anirss_lib.errors import AnirssError, QbtAuthError, QbtError
+from anirss_lib.logging import log
 
 
 def _build_multipart_body(boundary: str, fields: dict, file_field: str,
@@ -29,15 +31,32 @@ def _build_multipart_body(boundary: str, fields: dict, file_field: str,
         parts.append(str(val).encode())
         parts.append(b"\r\n")
     parts.append(f"--{boundary}\r\n".encode())
+    # A quote or line break in the filename would end the header and let the
+    # rest inject extra form fields (a second savepath, …); neutralize them.
+    safe_name = "".join("_" if c in '"\\' or ord(c) < 32 or ord(c) == 127 else c
+                        for c in file_name)
     parts.append(
         f'Content-Disposition: form-data; name="{file_field}"; '
-        f'filename="{file_name}"\r\n'.encode()
+        f'filename="{safe_name}"\r\n'.encode()
     )
     parts.append(f"Content-Type: {file_content_type}\r\n\r\n".encode())
     parts.append(file_bytes)
     parts.append(b"\r\n")
     parts.append(f"--{boundary}--\r\n".encode())
     return b"".join(parts)
+
+
+def _raise_http(endpoint: str, e: Exception):
+    """Turn a urllib failure into QbtError (QbtAuthError for 401/403, the
+    status qBittorrent answers once a session cookie has expired)."""
+    if isinstance(e, urllib.error.HTTPError):
+        body = e.read().decode(errors="replace") if e.fp else ""
+        msg = f"qBittorrent {endpoint} -> HTTP {e.code}: {body or e.reason}"
+        log("ERROR", f"  -> HTTP {e.code}: {body or e.reason}")
+        cls = QbtAuthError if e.code in (401, 403) else QbtError
+        raise cls(msg) from e
+    log("ERROR", f"  -> {e}")
+    raise QbtError(f"qBittorrent {endpoint}: {e}") from e
 
 
 class QbtSession:
@@ -54,10 +73,8 @@ class QbtSession:
         try:
             with self.opener.open(req, timeout=15) as resp:
                 body = resp.read().decode()
-        except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace") if e.fp else ""
-            log("ERROR", f"  -> HTTP {e.code}: {body or e.reason}")
-            die(f"qBittorrent {endpoint} -> HTTP {e.code}: {body or e.reason}")
+        except (urllib.error.URLError, OSError) as e:
+            _raise_http(endpoint, e)
         log("INFO", f"  -> {body[:200]!r}{'...' if len(body) > 200 else ''}")
         return body
 
@@ -86,10 +103,8 @@ class QbtSession:
         try:
             with self.opener.open(req, timeout=30) as resp:
                 body = resp.read().decode()
-        except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace") if e.fp else ""
-            log("ERROR", f"  -> HTTP {e.code}: {body or e.reason}")
-            die(f"qBittorrent {endpoint} -> HTTP {e.code}: {body or e.reason}")
+        except (urllib.error.URLError, OSError) as e:
+            _raise_http(endpoint, e)
         log("INFO", f"  -> {body[:200]!r}{'...' if len(body) > 200 else ''}")
         return body
 
@@ -102,10 +117,8 @@ class QbtSession:
         try:
             with self.opener.open(req, timeout=15) as resp:
                 body = resp.read().decode()
-        except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace") if e.fp else ""
-            log("ERROR", f"  -> HTTP {e.code}: {body or e.reason}")
-            die(f"qBittorrent {endpoint} -> HTTP {e.code}: {body or e.reason}")
+        except (urllib.error.URLError, OSError) as e:
+            _raise_http(endpoint, e)
         log("INFO", f"  -> {body[:200]!r}{'...' if len(body) > 200 else ''}")
         return body
 
@@ -120,7 +133,7 @@ class QbtSession:
             with self.opener.open(req, timeout=5) as resp:
                 resp.read()
             return True
-        except (urllib.error.HTTPError, urllib.error.URLError):
+        except (urllib.error.URLError, OSError):  # HTTPError, timeouts too
             return False
 
 
@@ -276,8 +289,9 @@ def _make_sid_cookie(host: str, name: str, value: str, *, https: bool
     )
 
 
-def _try_qbt_sid(base_url: str) -> QbtSession | None:
-    """Resume a qBittorrent session from the cached SID. None if no SID or it's dead."""
+def _try_qbt_sid(base_url: str, *, persist: bool = True) -> QbtSession | None:
+    """Resume a qBittorrent session from the cached SID. None if no SID or
+    it's dead (a dead one is deleted unless persist=False)."""
     loaded = _load_sid()
     if loaded is None:
         return None
@@ -289,7 +303,8 @@ def _try_qbt_sid(base_url: str) -> QbtSession | None:
     if sess.is_alive():
         log("INFO", "resumed qBittorrent session via cached SID")
         return sess
-    _drop_sid()
+    if persist:
+        _drop_sid()
     return None
 
 
@@ -357,43 +372,57 @@ def _wait_until_reachable(base_url: str, timeout: float = 30.0) -> bool:
     return False
 
 
-def _ensure_qbt_reachable(qbt_cfg: QbtConfig) -> None:
+def _print_notice(msg: str) -> None:
+    print(msg)
+
+
+def _ensure_qbt_reachable(qbt_cfg: QbtConfig, *, autostart: bool = True,
+                          notify: Callable[[str], None] | None = _print_notice
+                          ) -> None:
     """Make sure the WebUI answers before any login attempt.
 
     A local instance that isn't running is simply started: needing qBittorrent
     up is a precondition of every operation anirss performs, so asking first
     only ever produced one sensible answer. Non-interactive runs get the same
     treatment, which is what makes `anirss -S <url>` usable from scripts and
-    keybinds. Never returns until the server is up; it dies otherwise.
+    keybinds. Never returns until the server is up; raises QbtError
+    otherwise. `autostart=False` skips the launch (a server process should
+    not spawn qBittorrent behind its callers' backs); `notify` receives the
+    progress lines (None = silent).
     """
+    notify = notify or (lambda _msg: None)
     base_url = qbt_cfg["url"]
     if _qbt_reachable(base_url):
         return
 
     if not _is_local_url(base_url):
-        die(f"can't reach qBittorrent at {base_url}. It looks remote, so anirss "
-            f"can't start it for you. Is it running and reachable from here?")
+        raise QbtError(f"can't reach qBittorrent at {base_url}. It looks remote, so anirss "
+                       f"can't start it for you. Is it running and reachable from here?")
+    if not autostart:
+        raise QbtError(f"can't reach qBittorrent at {base_url}. Is it running?")
 
     cmd = _qbt_start_command(qbt_cfg)
     if cmd is None:
-        die(f"qBittorrent isn't running at {base_url}, and no qbittorrent-nox or "
-            f"qbittorrent binary was found on PATH. Start it yourself, or set "
-            f"[qbittorrent] start_command in your config.")
+        raise QbtError(f"qBittorrent isn't running at {base_url}, and no qbittorrent-nox or "
+                       f"qbittorrent binary was found on PATH. Start it yourself, or set "
+                       f"[qbittorrent] start_command in your config.")
 
-    print(f"{C_YEL}qBittorrent isn't running at {base_url}.{C_OFF}")
-    print(f"{C_CYN}==>{C_OFF} starting it ({C_BLD}{' '.join(cmd)}{C_OFF}), "
-          f"waiting for the WebUI…")
+    notify(f"{C_YEL}qBittorrent isn't running at {base_url}.{C_OFF}")
+    notify(f"{C_CYN}==>{C_OFF} starting it ({C_BLD}{' '.join(cmd)}{C_OFF}), "
+           f"waiting for the WebUI…")
     _launch_qbt(cmd)
     if not _wait_until_reachable(base_url):
-        die(f"started qBittorrent but {base_url} still isn't answering after 30s. "
-            f"Make sure the WebUI is enabled on that port.")
-    print(f"{C_GRN}OK:{C_OFF} qBittorrent is up.")
+        raise QbtError(f"started qBittorrent but {base_url} still isn't answering after 30s. "
+                       f"Make sure the WebUI is enabled on that port.")
+    notify(f"{C_GRN}OK:{C_OFF} qBittorrent is up.")
 
 
 # -------- login flow --------
 
-def qbt_login(base_url: str, username: str, password: str
-              ) -> tuple[QbtSession | None, str | None]:
+def qbt_login(base_url: str, username: str, password: str, *,
+              persist: bool = True) -> tuple[QbtSession | None, str | None]:
+    """(session, None) on success, (None, error) otherwise. `persist=False`
+    leaves the shared SID cache file alone."""
     opener, jar = _make_qbt_opener(base_url)
     data = urllib.parse.urlencode({"username": username, "password": password}).encode()
     req = urllib.request.Request(f"{base_url}/api/v2/auth/login", data=data)
@@ -404,7 +433,7 @@ def qbt_login(base_url: str, username: str, password: str
             set_cookie_headers = resp.headers.get_all("Set-Cookie") or []
     except urllib.error.HTTPError as e:
         return None, f"login: HTTP {e.code} {e.reason}"
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, OSError) as e:
         return None, f"can't reach qBittorrent at {base_url}: {e}"
     log("INFO", f"  -> body={body!r} set-cookie={set_cookie_headers!r}")
     # qBittorrent <5 returned "Ok."/"Fails."; v5+ returns HTTP 200 + empty body on success.
@@ -424,7 +453,8 @@ def qbt_login(base_url: str, username: str, password: str
     host = urllib.parse.urlparse(base_url).hostname or ""
     jar.set_cookie(_make_sid_cookie(host, sid_name, sid_value,
                                     https=base_url.startswith("https://")))
-    _save_sid(jar)
+    if persist:
+        _save_sid(jar)
     return QbtSession(opener, base_url), None
 
 
@@ -456,8 +486,8 @@ def login_with_retry(qbt_cfg: QbtConfig) -> QbtSession:
             # If it went away between the reachability probe and now, the saved
             # password is not at fault, so keep it and stop rather than wipe it.
             if not _qbt_reachable(base_url):
-                die(f"can't reach qBittorrent at {base_url}. It went away "
-                    f"mid-login. Left the saved password in place.")
+                raise QbtError(f"can't reach qBittorrent at {base_url}. It went away "
+                               f"mid-login. Left the saved password in place.")
             print(f"{C_YEL}saved qBittorrent password was rejected "
                   f"(did it change on the server?). Removing it{C_OFF}")
             log("WARN", f"saved password rejected: {err}")
@@ -467,7 +497,7 @@ def login_with_retry(qbt_cfg: QbtConfig) -> QbtSession:
         try:
             password = getpass.getpass(f"qBittorrent password ({attempt}/{retries}): ")
         except (EOFError, KeyboardInterrupt):
-            die("cancelled")
+            raise AnirssError("cancelled")
         if not password:
             print(f"{C_YEL}empty, try again{C_OFF}")
             continue
@@ -477,25 +507,32 @@ def login_with_retry(qbt_cfg: QbtConfig) -> QbtSession:
                 _offer_to_save_password(password)
             return qbt
         print(f"{C_RED}{err}{C_OFF}")
-    die(f"login failed after {retries} attempts")
+    raise QbtAuthError(f"login failed after {retries} attempts")
 
 
-def login_with_password(qbt_cfg: QbtConfig, password: str) -> QbtSession:
+def login_with_password(qbt_cfg: QbtConfig, password: str, *,
+                        autostart: bool = True,
+                        notify: Callable[[str], None] | None = _print_notice,
+                        persist: bool = True) -> QbtSession:
     """Non-interactive login: SID cache, then the given password, then a saved
-    password. No prompts, no retry loop. Used by the non-interactive flag flow.
+    password. No prompts, no retry loop. Used by the non-interactive flag flow
+    and the library/server (anirss_lib.api), which pass notify=None.
     """
-    _ensure_qbt_reachable(qbt_cfg)
-    sess = _try_qbt_sid(qbt_cfg["url"])
+    _ensure_qbt_reachable(qbt_cfg, autostart=autostart, notify=notify)
+    sess = _try_qbt_sid(qbt_cfg["url"], persist=persist)
     if sess is not None:
         return sess
     if not password and qbt_cfg["save_password"]:
         password = _load_password() or ""
     if not password:
-        die("qBittorrent login required (set ANIRSS_QBT_PASSWORD, use "
+        raise QbtAuthError("qBittorrent login required (set ANIRSS_QBT_PASSWORD, use "
             "--password-stdin, or save a password from an interactive run)")
-    qbt, err = qbt_login(qbt_cfg["url"], qbt_cfg["username"], password)
+    qbt, err = qbt_login(qbt_cfg["url"], qbt_cfg["username"], password,
+                         persist=persist)
     if qbt is None:
-        die(err or "qBittorrent login failed")
+        if err and err.startswith("can't reach"):
+            raise QbtError(err)
+        raise QbtAuthError(err or "qBittorrent login failed", rejected=True)
     return qbt
 
 

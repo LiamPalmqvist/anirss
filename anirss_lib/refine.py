@@ -2,8 +2,6 @@
 
 import signal
 import sys
-from collections import Counter, defaultdict
-from statistics import median
 
 from anirss_lib.ansi import (
     C_BLD, C_BLU, C_CYN, C_DIM, C_GRN, C_OFF, C_RED, C_YEL, PROMPT_FILTER,
@@ -13,6 +11,7 @@ from anirss_lib import (
     bestfit,
     endpoints as endpoints_mod,
     erai,
+    refinement,
     responsive,
     stats as stats_mod,
     terminal,
@@ -25,7 +24,13 @@ from anirss_lib.fzf import fzf_pick_with_query, view_all_titles
 from anirss_lib.logging import die, log
 from anirss_lib.nyaa import FetchError
 from anirss_lib.readline_input import prompt
-from anirss_lib.titles import RES_RE, poster_of, title_tokens
+# The pure building blocks live in refinement.py (shared with the HTTP API);
+# re-exported here so existing callers and tests keep importing them from refine.
+from anirss_lib.refinement import (  # noqa: F401
+    _best_fit_query_for, _custom_hit, _field_text, _insert_positional,
+    _matches_all_tokens, _members_of, _title_position, add_exclude_to_query,
+    add_term_to_query, build_refined_query, compute_groups,
+)
 from anirss_lib.types import (
     Group, Item, PICK_BACK, PICK_BEST_FIT, PICK_DONE, PICK_ENDPOINT,
     PICK_EXCLUDE, PICK_SHOW_ALL, Pick,
@@ -89,35 +94,15 @@ def _on_sigwinch(signum, frame) -> None:
 
 def auto_resolution(query: str, items: list[Item]) -> tuple[str, list[Item]]:
     """If query lacks a <n>p token and every item has one, append the highest."""
-    if RES_RE.search(query):
-        return query, items
-    per_max = [
-        max((int(match.group(1)) for match in RES_RE.finditer(item.title)),
-            default=None)
-        for item in items
-    ]
-    missing = sum(1 for res in per_max if res is None)
-    if missing:
-        print(f"{C_DIM}[skipping auto-resolution: {missing}/{len(items)} "
+    res = refinement.auto_resolution(query, items)
+    if res.skipped_missing:
+        print(f"{C_DIM}[skipping auto-resolution: {res.skipped_missing}/{len(items)} "
               f"title(s) lack a <n>p token]{C_OFF}")
-        log("INFO", f"skip auto-resolution: {missing} titles lack one")
-        return query, items
-    highest = max(res for res in per_max if res is not None)
-    token = f"{highest}p"
-    print(f"{C_YEL}[auto-appending highest available resolution: {token}]{C_OFF}")
-    log("INFO", f"auto-append {token} (max across {len(items)} titles)")
-    new_items = [item for item, res in zip(items, per_max) if res == highest]
-    return f"{query} {token}", new_items
-
-
-def _members_of(selected: list[Item], token: str) -> frozenset[int]:
-    return frozenset(
-        i for i, item in enumerate(selected)
-        if (token.startswith("[") and poster_of(item.title) == token)
-        or (not token.startswith("[")
-            and (token in title_tokens(item.title)
-                 or erai.metadata_hit(item, token)))
-    )
+        log("INFO", f"skip auto-resolution: {res.skipped_missing} titles lack one")
+    elif res.token:
+        print(f"{C_YEL}[auto-appending highest available resolution: {res.token}]{C_OFF}")
+        log("INFO", f"auto-append {res.token} (max across {len(items)} titles)")
+    return res.query, res.items
 
 
 def _rss_active(state: EndpointState) -> bool:
@@ -129,55 +114,6 @@ def _rss_active(state: EndpointState) -> bool:
     itself — see erai.split_noise). nyaa keeps its server-side refetch,
     which can surface episodes beyond the first RSS page."""
     return state.active.kind != "nyaa"
-
-
-def _matches_all_tokens(item: Item, tokens: list[str]) -> bool:
-    poster = poster_of(item.title)
-    toks = title_tokens(item.title)
-    return all(
-        (poster == t) if t.startswith("[")
-        else (t in toks or erai.metadata_hit(item, t))
-        for t in tokens
-    )
-
-
-def _custom_hit(item: Item, term_lc: str) -> bool:
-    """Custom-term match: title substring, plus erai's structured fields
-    (the polished title drops the linktype, so 'Torrent' only exists there;
-    items without erai metadata match on the title alone)."""
-    return term_lc in item.title.lower() or erai.metadata_hit(item, term_lc)
-
-
-def compute_groups(selected: list[Item]) -> list[Group]:
-    """Find tokens that partition `selected` into refinable subsets, grouped by membership."""
-    total = len(selected)
-    counts: Counter[str] = Counter()
-    for item in selected:
-        seen: set[str] = set()
-        poster = poster_of(item.title)
-        if poster:
-            seen.add(poster)
-        for token in title_tokens(item.title):
-            seen.add(token)
-        for token in seen:
-            counts[token] += 1
-
-    refinable = [token for token, count in counts.items() if 1 < count < total]
-
-    by_members: dict[frozenset[int], list[str]] = defaultdict(list)
-    for token in refinable:
-        by_members[_members_of(selected, token)].append(token)
-
-    groups: list[Group] = []
-    for members, tokens in by_members.items():
-        tokens_sorted = sorted(tokens, key=lambda x: (not x.startswith("["),
-                                                     -len(x), x))
-        label = "+".join(tokens_sorted)
-        has_poster = any(token.startswith("[") for token in tokens)
-        groups.append(Group(label, tokens_sorted, len(members), has_poster))
-
-    groups.sort(key=lambda g: (not g.has_poster, -g.member_count, g.label))
-    return groups
 
 
 def pick_group(groups: list[Group], selected: list[Item],
@@ -247,102 +183,6 @@ def pick_group(groups: list[Group], selected: list[Item],
         return PICK_DONE
     log("INFO", f"picked {chosen_label!r} -> tokens {chosen.tokens}")
     return Pick("tokens", chosen.tokens)
-
-
-def _best_fit_query_for(query: str, selected: list[Item],
-                        cfg: BestfitConfig) -> str:
-    """The query [★ Try Best Fit] would refetch with, or "" when running it
-    would be a no-op (nothing to rank, empty rebuild, or the current query
-    already matching the top release's profile)."""
-    best = bestfit.best_item(selected, cfg)
-    if best is None:
-        return ""
-    new_query = bestfit.best_fit_query(best)
-    if not new_query or new_query.lower() == query.lower():
-        return ""
-    return new_query
-
-
-def _field_text(field: str) -> str:
-    """The matchable core of a query field: drop a leading `-` and any quotes."""
-    core = field[1:] if field.startswith("-") else field
-    if len(core) >= 2 and core[0] == '"' and core[-1] == '"':
-        core = core[1:-1]
-    return core.lower()
-
-
-def _title_position(text: str, selected: list[Item]) -> float:
-    """Median index at which `text` appears across the selected titles.
-
-    inf when no title contains it. Using the median (rather than one sample)
-    keeps the ordering stable when release groups format titles differently.
-    """
-    spots = [
-        item.title.lower().index(text)
-        for item in selected
-        if text and text in item.title.lower()
-    ]
-    return median(spots) if spots else float("inf")
-
-
-def _insert_positional(query: str, token: str, selected: list[Item]) -> str:
-    """Slot `token` into `query` ahead of the first existing field that occurs
-    *later* in the titles, so the query mirrors real release-name order (e.g.
-    1080p before multisub) instead of being blindly appended. Posters are never
-    crossed; exclusions (`-tag`) always stay at the tail.
-    """
-    fields = endpoints_mod.FIELD_RE.findall(query)
-    token_pos = _title_position(token.lower(), selected)
-    insert_at = len(fields)
-    for i, field in enumerate(fields):
-        if field.startswith("["):          # never slot in front of a poster
-            continue
-        if field.startswith("-"):          # exclusions stay at the end
-            insert_at = i
-            break
-        if _title_position(_field_text(field), selected) > token_pos:
-            insert_at = i
-            break
-    fields.insert(insert_at, token)
-    return " ".join(fields)
-
-
-def build_refined_query(query: str, tokens: list[str], selected: list[Item]
-                        ) -> str:
-    """Extend `query` with `tokens`, each placed where it belongs.
-
-    A poster (`[...]`) leads the title, so it goes to the front unless the query
-    already starts with one. Every other token is positioned by where it occurs
-    in the titles (see `_insert_positional`). Returns the rebuilt query string;
-    the caller refetches nyaa with it rather than filtering locally, so episodes
-    beyond the first RSS page can surface.
-    """
-    new_query = query
-    for token in tokens:
-        if token.startswith("["):
-            if not new_query.lstrip().startswith("["):
-                new_query = f"{token} {new_query}"
-            continue
-        new_query = _insert_positional(new_query, token, selected)
-    return new_query
-
-
-def add_exclude_to_query(query: str, term: str) -> str:
-    """Append nyaa-style -tag to query. Returns query unchanged if term is empty after stripping."""
-    term = term.lstrip("-").strip()
-    if not term:
-        return query
-    flag = f'-"{term}"' if " " in term else f"-{term}"
-    return f"{query} {flag}"
-
-
-def add_term_to_query(query: str, term: str) -> str:
-    """Append a positive search term to query, quoting if it contains spaces."""
-    term = term.strip()
-    if not term:
-        return query
-    flag = f'"{term}"' if " " in term else term
-    return f"{query} {flag}"
 
 
 def refine(initial_query: str, items: list[Item], state: EndpointState,

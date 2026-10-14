@@ -24,6 +24,7 @@ from anirss_lib.config import (
 )
 from anirss_lib import endpoints as endpoints_mod
 from anirss_lib.endpoints import Endpoint, EndpointState, load_endpoints
+from anirss_lib.errors import AnirssError
 from anirss_lib.format import (
     category_chip, colorize_title, format_stats, show_titles,
     source_header_row,
@@ -45,11 +46,7 @@ from anirss_lib.types import Item
 
 # ---- small helpers ----
 
-def _pick_top_n(items: list[Item], n: int) -> list[Item]:
-    """Top-N by downloads, clamped to len(items). Stable for ties. Unknown
-    downloads (feeds without stats) sort last, like -1."""
-    return sorted(items, key=lambda i: i.downloads if i.downloads is not None else -1,
-                  reverse=True)[:n]
+_pick_top_n = stats_mod.top_by_downloads
 
 
 def _save_base_for(parsed: "ParsedArgs", cfg: "AnirssConfig") -> str:
@@ -158,6 +155,10 @@ def _handle_meta_flags(argv: list[str], cfg: AnirssConfig) -> bool:
         return True
     if a == "--migrate-config":
         migrate_config()
+        return True
+    if a == "--serve":
+        from anirss_lib.server import serve
+        serve(argv[1:], cfg)
         return True
     return False
 
@@ -527,11 +528,9 @@ def _run_interactive(initial_query: str, force_url: str | None,
                 if selected:
                     default_name = show_name(selected[0].title) or default_name
                 if action == ACT_SUB:
-                    feed_url, must_contain, excluded = (
-                        endpoints_mod.subscription_feed(eps.active, query,
-                                                        selected))
-                    sub_endpoint_name = eps.active.name
-                    must_not_contain = "|".join(excluded)
+                    spec = endpoints_mod.build_subscription(eps.active, query,
+                                                            selected)
+                    feed_url, must_contain, must_not_contain, sub_endpoint_name = spec
                 elif action == ACT_DL_ALL:
                     download_links = [it.link for it in selected]
                 elif action == ACT_DL_PICK:
@@ -591,6 +590,15 @@ def _run_interactive(initial_query: str, force_url: str | None,
 # ---- entry point ----
 
 def main() -> None:
+    """CLI entry. Library code raises AnirssError; only here does it become
+    the red `error:` line + exit 1 the CLI has always printed."""
+    try:
+        _main()
+    except AnirssError as e:
+        die(str(e))
+
+
+def _main() -> None:
     # Before anything else, so `ps`/`htop`/`pidof` never show a bare "python3".
     proctitle.apply()
 

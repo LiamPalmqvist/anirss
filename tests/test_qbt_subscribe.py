@@ -1,5 +1,6 @@
 import json
 
+from anirss_lib.errors import QbtError
 from anirss_lib.qbt import actions
 
 
@@ -49,10 +50,10 @@ def test_unique_rule_name_survives_api_errors():
     assert actions._unique_rule_name(Boom(), "Show", "http://f", "x") == "Show"
 
 
-def test_unique_rule_name_survives_die_style_exit():
+def test_unique_rule_name_survives_qbt_error():
     class Dies:
         def get_json(self, path):
-            raise SystemExit(1)
+            raise QbtError("HTTP 500")
     assert actions._unique_rule_name(Dies(), "Show", "http://f", "x") == "Show"
 
 

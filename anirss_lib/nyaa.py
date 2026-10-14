@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from anirss_lib.errors import FetchError
 from anirss_lib.logging import log
 from anirss_lib.types import Item
 
@@ -30,10 +31,6 @@ def _str_text(elem: ET.Element | None) -> str:
     if elem is None or not elem.text:
         return ""
     return elem.text.strip()
-
-
-class FetchError(Exception):
-    """A search endpoint couldn't be fetched or parsed."""
 
 
 _DESC_SIZE_RE = re.compile(r"Size:\s*([\d.,]+\s*[KMGT]?i?B)", re.IGNORECASE)

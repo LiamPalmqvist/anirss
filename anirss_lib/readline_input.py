@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from anirss_lib.errors import ValidationError
 from anirss_lib.logging import die, log
 
 
@@ -87,8 +88,8 @@ def get_name(default_name: str | None) -> str:
     name = prompt(label, history="name")
     if not name and default_name:
         name = default_name
-    if not name:
-        die("name cannot be empty")
-    if "/" in name or "\\" in name:
-        die("name must not contain '/' or '\\'")
-    return name
+    from anirss_lib.qbt.actions import validate_name
+    try:
+        return validate_name(name)
+    except ValidationError as e:
+        die(str(e))
