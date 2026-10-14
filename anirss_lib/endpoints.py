@@ -149,12 +149,15 @@ def subscription_feed(ep: Endpoint, query: str, items: list[Item]
     feed titles, which carry no [group] poster. When the slug can't be
     resolved, the search feed is used with only the searchable terms on the
     wire and the quality tokens (which would zero the s= search out) moved
-    into mustContain as well. Every other endpoint keeps the feed_url()
+    into mustContain as well. Either way, a query that picks no AVC/HEVC
+    variant gets the HEVC encode excluded (erai.variant_exclusions) so each
+    episode downloads once. Every other endpoint keeps the feed_url()
     behavior with an empty mustContain."""
     from anirss_lib import erai
     if erai.is_erai(ep):
         per_show = erai.resolve_show_feed(ep, items)
         positive, excluded = split_exclusions(query)
+        excluded += erai.variant_exclusions(query)
         if per_show:
             must = " ".join(
                 field.strip('"') for field in FIELD_RE.findall(positive)
