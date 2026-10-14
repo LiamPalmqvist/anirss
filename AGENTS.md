@@ -18,3 +18,9 @@ capability): follow `docs/agents/README.md`; it routes to the steps and to
 `subprocess.run` without `check=`, …). The bar is introducing zero new ones —
 diff the (file, rule) pairs against the pre-change output rather than
 expecting a clean run, and never reformat untouched code to silence them.
+
+## Git
+
+Committing is pre-approved: commit whenever the build passes. Work on a
+worktree branch off `main`, push that branch, and open a PR against `main`.
+An open PR is the finish line; the task is done once it exists.

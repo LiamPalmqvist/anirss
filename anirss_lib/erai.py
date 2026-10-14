@@ -72,13 +72,38 @@ _QUALITY_RE = re.compile(
     r")$", re.IGNORECASE)
 
 
-def is_quality_token(field: str) -> bool:
-    """Is this query field a quality facet (see _QUALITY_RE)? A leading `-`
-    and quotes are stripped before the whole-token check."""
+def _field_core(field: str) -> str:
+    """A query field without its leading `-` and surrounding quotes."""
     core = field.removeprefix("-")
     if len(core) >= 2 and core[0] == '"' and core[-1] == '"':
         core = core[1:-1]
+    return core
+
+
+def is_quality_token(field: str) -> bool:
+    """Is this query field a quality facet (see _QUALITY_RE)? A leading `-`
+    and quotes are stripped before the whole-token check."""
+    core = _field_core(field)
     return bool(core) and bool(_QUALITY_RE.fullmatch(core))
+
+
+# Erai posts every episode twice into the same feed: the AVC WEB-DL as it
+# airs ([Airing]) and an HEVC re-encode hours later ([Encoded]). No feed
+# parameter separates them, so a qB rule that names neither variant matches
+# both and downloads each episode twice.
+_VARIANT_RE = re.compile(
+    r"^(?:avc|hevc|x[\s._-]?26[45]|h[\s._-]?26[45]"
+    r"|web[\s._-]?(?:dl|rip)|airing|encoded)$", re.IGNORECASE)
+
+
+def variant_exclusions(query: str) -> list[str]:
+    """Rule exclusions that keep a subscription to one release per episode:
+    ["HEVC"] (drop the re-encode, keep the airing WEB-DL) unless a field of
+    `query`, positive or `-`excluded, already picks a variant."""
+    if any(_VARIANT_RE.fullmatch(_field_core(f))
+           for f in FIELD_RE.findall(query)):
+        return []
+    return ["HEVC"]
 
 
 def split_noise(query: str) -> tuple[str, list[str]]:
