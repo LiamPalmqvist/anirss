@@ -21,7 +21,7 @@ def test_preview_full_screen_stays_on_active(monkeypatch, capsys):
     monkeypatch.setattr(main_mod.terminal, "get_size",
                         lambda: os.terminal_size((80, 14)))
 
-    def fake_fetch(ep, query):
+    def fake_fetch(ep, query, **_kw):
         assert ep.name == "erai", "screen is full, must not probe others"
         return [Item(f"Show - {i:02d} [1080p]", "l") for i in range(10)]
 
@@ -33,7 +33,7 @@ def test_preview_full_screen_stays_on_active(monkeypatch, capsys):
 
 
 def test_preview_sparse_active_appends_next_source(monkeypatch, capsys):
-    def fake_fetch(ep, query):
+    def fake_fetch(ep, query, **_kw):
         if ep.name == "erai":
             return [Item("86 Eighty-Six - 01 ~ 11 [1080p][Batch]", "l")]
         return [Item("86 Eighty-Six - 05 [1080p]", "l"),
@@ -48,7 +48,7 @@ def test_preview_sparse_active_appends_next_source(monkeypatch, capsys):
 
 
 def test_preview_empty_active_falls_back_with_header(monkeypatch, capsys):
-    def fake_fetch(ep, query):
+    def fake_fetch(ep, query, **_kw):
         if ep.name == "nyaa":
             return [Item("Sparks of Tomorrow S01E01 1080p", "l")]
         return []
@@ -63,7 +63,7 @@ def test_preview_empty_active_falls_back_with_header(monkeypatch, capsys):
 
 
 def test_preview_unreachable_active_still_falls_back(monkeypatch, capsys):
-    def fake_fetch(ep, query):
+    def fake_fetch(ep, query, **_kw):
         if ep is ERAI:
             raise FetchError("can't reach erai: boom")
         return [Item("Sparks of Tomorrow S01E01 1080p", "l")]
@@ -77,14 +77,14 @@ def test_preview_unreachable_active_still_falls_back(monkeypatch, capsys):
 
 def test_preview_empty_everywhere_prints_note(monkeypatch, capsys):
     monkeypatch.setattr(main_mod.endpoints_mod, "fetch_items",
-                        lambda ep, q: [])
+                        lambda ep, q, **_kw: [])
     main_mod._print_search_rss_rows("nothing", ERAI, [ERAI, NYAA])
     assert "no results" in _out(capsys)
 
 
 def test_preview_single_endpoint_stays_plain(monkeypatch, capsys):
     monkeypatch.setattr(main_mod.endpoints_mod, "fetch_items",
-                        lambda ep, q: [])
+                        lambda ep, q, **_kw: [])
     main_mod._print_search_rss_rows("nothing", ERAI, [ERAI])
     out = _out(capsys)
     assert "──" not in out

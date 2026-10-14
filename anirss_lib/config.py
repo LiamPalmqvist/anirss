@@ -52,6 +52,13 @@ class EndpointConfig(TypedDict, total=False):
     url: str
     category: str    # nyaa kind only
     filter: str      # nyaa kind only
+    start: str       # on-demand: command that brings the service up
+    stop: str        # on-demand: command that takes it down again
+    ready: str       # on-demand: URL that answers 2xx once it is up
+    timeout: float   # seconds per fetch (and for `ready` to come up)
+    save_base: str   # overrides [downloads].save_base for this endpoint
+    movie_path: str  # overrides [downloads].movie_path for this endpoint
+    tags: list[str]  # overrides [qbittorrent].tags for this endpoint
 
 
 class BestfitConfig(TypedDict):
@@ -148,6 +155,25 @@ filter = "0"
 #name = "anirena"
 #kind = "rss"
 #url = "https://www.anirena.com/rss?q={query}&adult=1"
+
+# Any endpoint can override where its downloads land and how they are
+# tagged (save_base, movie_path, tags). An endpoint backed by a local
+# service (e.g. a Jackett torznab feed) can be on-demand: `start` brings it
+# up when you pick the endpoint, `ready` is polled until it answers 2xx, and
+# `stop` takes it down once nothing needs it any more. Subscriptions on it
+# are polled by `anirss --refresh-on-demand` (the anirss-on-demand.timer
+# user unit runs it hourly), which starts the service just for that.
+#[[endpoint]]
+#name = "1337x"
+#kind = "rss"
+#url = "http://127.0.0.1:9117/api/v2.0/indexers/1337x/results/torznab/api?apikey=KEY&t=search&q={query}"
+#start = "systemd-run --user --scope --quiet podman pod start anirss-1337x"
+#stop = "podman pod stop anirss-1337x"
+#ready = "http://127.0.0.1:9117/api/v2.0/indexers/1337x/results/torznab/api?apikey=KEY&t=caps"
+#timeout = 60
+#save_base = "~/Downloads/TV"
+#movie_path = "~/Downloads/Movies"
+#tags = ["TV"]
 
 [bestfit]
 # "[★ Try Best Fit]" in the refine picker auto-pins the best quality profile

@@ -322,8 +322,9 @@ def enrich(items: list[Item], *, deadline_s: float = 20.0) -> list[Item]:
     by_url: dict[str, list[int]] = {}      # torrent URL -> item indexes
     resolved: dict[int, Stats] = {}
     for i, item in enumerate(items):
-        if item.seeders is not None and item.leechers is not None \
-                and item.downloads is not None:
+        # Torznab feeds carry live seeders/leechers but often no download
+        # count; scraping would only re-fetch numbers already in hand.
+        if item.seeders is not None and item.leechers is not None:
             continue
         if item.link.startswith(("http://", "https://")):
             cached = _cached_stats(item.link)
@@ -410,9 +411,12 @@ def enrich(items: list[Item], *, deadline_s: float = 20.0) -> list[Item]:
 
 def top_by_downloads(items: list[Item], n: int) -> list[Item]:
     """Top-N by downloads, clamped to len(items). Stable for ties. Unknown
-    downloads (feeds without stats) sort last, like -1."""
-    return sorted(items, key=lambda i: i.downloads if i.downloads is not None else -1,
-                  reverse=True)[:n]
+    downloads (feeds without stats) sort last, like -1, with seeders
+    breaking the tie."""
+    return sorted(items, key=lambda i: (
+        i.downloads if i.downloads is not None else -1,
+        i.seeders if i.seeders is not None else -1,
+    ), reverse=True)[:n]
 
 
 def _with_stats(item: Item, stats: Stats) -> Item:

@@ -1,0 +1,10 @@
+[Unit]
+Description=anirss: hourly poll of on-demand endpoint feeds
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

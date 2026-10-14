@@ -101,6 +101,31 @@ During refining (token picks, filters, excludes, Best Fit), zero-result fetches 
 
 Subscribing to the same show from a second endpoint doesn't overwrite the existing qBittorrent rule/feed; the name gets suffixed with ` @<endpoint>` (e.g. `Frieren @anirena`) so both stick around side by side.
 
+### Per-endpoint overrides and on-demand endpoints
+
+Any `[[endpoint]]` can override `save_base`, `movie_path` and `tags`, so a TV tracker can land in its own folder with its own tag instead of the anime ones.
+
+An endpoint backed by a local service, such as a Jackett torznab feed, can be **on-demand**: give it a `start` command, a `ready` URL and a `stop` command, and the service only runs while something needs it.
+
+```toml
+[[endpoint]]
+name = "1337x"
+kind = "rss"   # torznab feeds parse as rss (seeders, leechers, size, category)
+url = "http://127.0.0.1:9117/api/v2.0/indexers/1337x/results/torznab/api?apikey=KEY&t=search&q={query}"
+start = "systemd-run --user --scope --quiet podman pod start anirss-1337x"
+stop = "podman pod stop anirss-1337x"
+ready = "http://127.0.0.1:9117/api/v2.0/indexers/1337x/results/torznab/api?apikey=KEY&t=caps"
+timeout = 60          # seconds per search (on-demand default 60, otherwise 10)
+save_base = "~/Downloads/TV"
+movie_path = "~/Downloads/Movies"
+tags = ["TV"]
+```
+
+- Picking the endpoint (`-e`, `Ctrl-E`, or it being first) starts the service and prints `1337x: starting connection...` / `1337x: connected (7s)`. anirss stops it again on exit, unless someone else still uses it or it was already running before.
+- Auto-fallback and the live preview never start an on-demand endpoint; they skip it while it is off.
+- Downloads hand qBittorrent the magnet behind the service's download link, so nothing depends on the service afterwards.
+- Subscriptions stay ordinary qBittorrent feeds + rules. `anirss --refresh-on-demand` starts each on-demand endpoint that has subscriptions, lets qBittorrent refresh those feeds and grab the matches, then stops it. `install.sh` installs `anirss-on-demand.timer`, a systemd user timer that runs it hourly.
+
 `[search]` (the old single-endpoint config block) is now the deprecated legacy fallback: it only applies when no `[[endpoint]]` is defined at all. Existing configs that only have `[search]` keep working exactly as before.
 
 ## Tags
@@ -137,6 +162,7 @@ anirss --noconfirm          Skip the y/N prompt for -R*.
 anirss --no-seed            Set qBittorrent to pause torrents at ratio 0.
 anirss --config             Print resolved config and exit.
 anirss --migrate-config     Append any new default config sections.
+anirss --refresh-on-demand  Let qBittorrent poll on-demand endpoint feeds.
 anirss --version            Print version.
 ```
 

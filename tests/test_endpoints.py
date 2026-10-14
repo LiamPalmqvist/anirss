@@ -122,7 +122,7 @@ def test_filter_excluded_case_insensitive():
 def test_fetch_items_rss_kind_applies_exclusions(monkeypatch):
     fetched_urls = []
 
-    def fake_fetch_rss(url, endpoint_name="feed"):
+    def fake_fetch_rss(url, endpoint_name="feed", timeout=10.0):
         fetched_urls.append(url)
         return [Item("Show 05 HEVC", "l1"), Item("Show 05 AVC", "l2")]
 
@@ -136,7 +136,7 @@ def test_fetch_items_rss_kind_applies_exclusions(monkeypatch):
 def test_fetch_items_nyaa_kind_sends_exclusions(monkeypatch):
     import urllib.parse
 
-    def fake_fetch_rss(url, endpoint_name="feed"):
+    def fake_fetch_rss(url, endpoint_name="feed", timeout=10.0):
         assert "-HEVC" in urllib.parse.unquote_plus(url)
         return [Item("t", "l")]
 

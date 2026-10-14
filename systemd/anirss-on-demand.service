@@ -1,0 +1,7 @@
+[Unit]
+Description=anirss: let qBittorrent poll on-demand endpoint feeds
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/anirss --refresh-on-demand
