@@ -1,6 +1,7 @@
 """File-based logging + die() for fatal exits."""
 
 import datetime
+import logging as _stdlog
 import os
 import sys
 from typing import NoReturn, TextIO
@@ -20,7 +21,15 @@ def init_log(log_path: str) -> None:
         _LOG_FILE = None
 
 
+# Library embedders get every log line through the stdlib logger "anirss"
+# (silent unless they configure logging); the CLI also writes anirss.log.
+_STD = _stdlog.getLogger("anirss")
+_STD.addHandler(_stdlog.NullHandler())
+_LEVELS = {"INFO": _stdlog.INFO, "WARN": _stdlog.WARNING, "ERROR": _stdlog.ERROR}
+
+
 def log(level: str, msg: str) -> None:
+    _STD.log(_LEVELS.get(level, _stdlog.INFO), msg)
     if _LOG_FILE is None:
         return
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

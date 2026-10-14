@@ -1,6 +1,7 @@
 import pytest
 
 from anirss_lib import endpoints
+from anirss_lib.errors import ConfigError, NotFoundError
 from anirss_lib.endpoints import Endpoint, EndpointState
 
 
@@ -27,20 +28,20 @@ def test_load_endpoints_valid():
     {"name": "a", "kind": "rss", "url": "https://x/rss"},        # no {query}
     {"name": "a", "kind": "nyaa"},                               # no url
 ])
-def test_load_endpoints_invalid_dies(bad):
-    with pytest.raises(SystemExit):
+def test_load_endpoints_invalid_raises(bad):
+    with pytest.raises(ConfigError):
         endpoints.load_endpoints({"endpoint": [bad]})
 
 
-def test_load_endpoints_duplicate_name_dies():
+def test_load_endpoints_duplicate_name_raises():
     ep = {"name": "nyaa", "kind": "nyaa", "url": "https://nyaa.si/"}
-    with pytest.raises(SystemExit):
+    with pytest.raises(ConfigError):
         endpoints.load_endpoints({"endpoint": [ep, dict(ep)]})
 
 
-def test_load_endpoints_invalid_name_chars_dies():
+def test_load_endpoints_invalid_name_chars_raises():
     ep = {"name": "bad name)", "kind": "nyaa", "url": "https://x/"}
-    with pytest.raises(SystemExit):
+    with pytest.raises(ConfigError):
         endpoints.load_endpoints({"endpoint": [ep]})
 
 
@@ -85,8 +86,8 @@ def test_state_active_by_name():
     assert st.active is ANIRENA
 
 
-def test_state_unknown_name_dies():
-    with pytest.raises(SystemExit):
+def test_state_unknown_name_raises():
+    with pytest.raises(NotFoundError):
         EndpointState([NYAA, ANIRENA], "tosho")
 
 

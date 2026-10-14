@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
 from anirss_lib.ansi import C_CYN, C_DIM, C_GRN, C_OFF, C_YEL
+from anirss_lib.errors import ConfigError
 from anirss_lib.logging import die
 
 
@@ -71,6 +72,13 @@ class DisplayConfig(TypedDict):
     force_show_seeders: bool
 
 
+class ServerConfig(TypedDict):
+    host: str
+    port: int
+    token: str
+    cors_origins: list[str]
+
+
 class AnirssConfig(TypedDict):
     qbittorrent: QbtConfig
     downloads: DownloadsConfig
@@ -79,6 +87,7 @@ class AnirssConfig(TypedDict):
     bestfit: BestfitConfig
     logging: LoggingConfig
     display: DisplayConfig
+    server: ServerConfig
 
 
 DEFAULT_CONFIG_TOML = """\
@@ -178,6 +187,18 @@ show_leechers = false
 # Below ~70 columns the seeders column is auto-hidden so the title still
 # fits. Set this to `true` to always render seeders regardless of width.
 force_show_seeders = false
+
+[server]
+# `anirss --serve` exposes everything anirss does as a JSON HTTP API (see
+# docs/agents/) for frontends and other apps. Loopback-only by default.
+host = "127.0.0.1"
+port = 8787
+# Bearer token every client must send (Authorization: Bearer <token>).
+# ANIRSS_API_TOKEN in the environment overrides; left empty, one is generated
+# once into ~/.local/state/anirss/api.token and printed at startup.
+token = ""
+# Browser origins allowed to call the API (CORS), e.g. ["http://localhost:5173"].
+cors_origins = []
 """
 
 DEFAULT_CONFIG: AnirssConfig = cast(AnirssConfig, tomllib.loads(DEFAULT_CONFIG_TOML))
@@ -239,23 +260,47 @@ def migrate_config() -> None:
         print(f"  {C_CYN}+{C_OFF} [{name}]")
 
 
-def load_config() -> AnirssConfig:
+def load_config(path: Path | None = None, *, bootstrap: bool = True,
+                strict: bool = False) -> AnirssConfig:
+    """Defaults merged with the TOML at `path` (default CONFIG_PATH).
+
+    CLI behavior (the defaults): a missing file is bootstrapped with the
+    default config, and an unreadable one is warned about on stderr and
+    ignored. Library callers pass bootstrap=False to keep it side-effect
+    free, and strict=True to get a ConfigError instead of the warning."""
+    path = CONFIG_PATH if path is None else Path(path).expanduser()
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     user_cfg: dict = {}
-    if CONFIG_PATH.exists():
+    if path.exists():
         try:
-            with CONFIG_PATH.open("rb") as f:
+            with path.open("rb") as f:
                 user_cfg = tomllib.load(f)
             _deep_merge(cfg, user_cfg)
         except (OSError, tomllib.TOMLDecodeError) as e:
-            print(f"{C_YEL}warning: bad config at {CONFIG_PATH}: {e}{C_OFF}", file=sys.stderr)
-    else:
+            if strict:
+                raise ConfigError(f"bad config at {path}: {e}") from e
+            print(f"{C_YEL}warning: bad config at {path}: {e}{C_OFF}", file=sys.stderr)
+    elif bootstrap:
         try:
-            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            CONFIG_PATH.write_text(DEFAULT_CONFIG_TOML)
-            print(f"{C_DIM}wrote default config: {CONFIG_PATH} (edit it!){C_OFF}", file=sys.stderr)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(DEFAULT_CONFIG_TOML)
+            print(f"{C_DIM}wrote default config: {path} (edit it!){C_OFF}", file=sys.stderr)
         except OSError as e:
-            print(f"{C_YEL}warning: couldn't create {CONFIG_PATH}: {e}{C_OFF}", file=sys.stderr)
+            print(f"{C_YEL}warning: couldn't create {path}: {e}{C_OFF}", file=sys.stderr)
+    return _finish(cfg, user_cfg)
+
+
+def build_config(user_cfg: dict | None = None) -> AnirssConfig:
+    """Defaults merged with an in-memory config dict (same shape as
+    config.toml). No filesystem access: the entry point for embedders that
+    keep their own settings."""
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    user_cfg = copy.deepcopy(user_cfg or {})
+    _deep_merge(cfg, user_cfg)
+    return _finish(cfg, user_cfg)
+
+
+def _finish(cfg: AnirssConfig, user_cfg: dict) -> AnirssConfig:
     if "endpoint" not in user_cfg:
         # Legacy config (or fresh defaults): honor [search] by synthesizing
         # the endpoint list from it, so an edited nyaa_url keeps working.
@@ -266,5 +311,6 @@ def load_config() -> AnirssConfig:
         }]
     cfg["downloads"]["save_base"] = os.path.expanduser(cfg["downloads"]["save_base"])
     cfg["downloads"]["movie_path"] = os.path.expanduser(cfg["downloads"]["movie_path"])
+    cfg["downloads"]["hidden_base"] = os.path.expanduser(cfg["downloads"]["hidden_base"])
     cfg["logging"]["log_path"] = os.path.expanduser(cfg["logging"]["log_path"])
     return cfg

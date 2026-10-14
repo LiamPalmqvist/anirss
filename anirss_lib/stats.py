@@ -22,6 +22,7 @@ import os
 import re
 import socket
 import struct
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -75,6 +76,14 @@ def _decode(data: bytes, pos: int) -> tuple[object, int]:
     colon = data.index(b":", pos)
     n = int(data[pos:colon])
     return data[colon + 1:colon + 1 + n], colon + 1 + n
+
+
+def info_hash(data: bytes) -> bytes:
+    """SHA-1 info-hash of .torrent bytes (trackerless torrents too). Raises
+    ValueError on anything that doesn't parse."""
+    start = data.index(b"4:info") + len(b"4:info")
+    _info, end = _decode(data, start)
+    return hashlib.sha1(data[start:end]).digest()
 
 
 def torrent_facts(data: bytes) -> tuple[bytes, list[str]]:
@@ -243,9 +252,17 @@ def _fetch_torrent(url: str, timeout: float = TORRENT_TIMEOUT) -> bytes | None:
 
 
 _MEM_CACHE: dict[str, tuple[float, Stats]] = {}
+# The API server runs enrich() from several request threads at once; this
+# guards _MEM_CACHE mutation and the single stats.json writer.
+_CACHE_LOCK = threading.Lock()
 
 
 def _load_disk_cache() -> None:
+    with _CACHE_LOCK:
+        _load_disk_cache_locked()
+
+
+def _load_disk_cache_locked() -> None:
     if _MEM_CACHE:
         return
     try:
@@ -259,6 +276,11 @@ def _load_disk_cache() -> None:
 
 
 def _save_disk_cache() -> None:
+    with _CACHE_LOCK:
+        _save_disk_cache_locked()
+
+
+def _save_disk_cache_locked() -> None:
     now = time.time()
     fresh = {url: [ts, *(stats if stats else (None, None, None))]
              for url, (ts, stats) in _MEM_CACHE.items()
@@ -368,21 +390,29 @@ def enrich(items: list[Item], *, deadline_s: float = 20.0) -> list[Item]:
                 found[h] = stats_
 
     now = time.time()
-    for url, idxs in by_url.items():
-        fact = facts.get(url)
-        stats_ = found.get(fact[0]) if fact else None
-        if stats_ is None:
-            # Negative-cache: a dead link or silent tracker stays unknown
-            # until the TTL, instead of being re-fetched on every render.
-            _MEM_CACHE[url] = (now, None)
-            continue
-        _MEM_CACHE[url] = (now, stats_)
-        for i in idxs:
-            resolved[i] = stats_
-    _save_disk_cache()
+    with _CACHE_LOCK:
+        for url, idxs in by_url.items():
+            fact = facts.get(url)
+            stats_ = found.get(fact[0]) if fact else None
+            if stats_ is None:
+                # Negative-cache: a dead link or silent tracker stays unknown
+                # until the TTL, instead of being re-fetched on every render.
+                _MEM_CACHE[url] = (now, None)
+                continue
+            _MEM_CACHE[url] = (now, stats_)
+            for i in idxs:
+                resolved[i] = stats_
+        _save_disk_cache_locked()
 
     return [_with_stats(it, resolved[i]) if i in resolved else it
             for i, it in enumerate(items)]
+
+
+def top_by_downloads(items: list[Item], n: int) -> list[Item]:
+    """Top-N by downloads, clamped to len(items). Stable for ties. Unknown
+    downloads (feeds without stats) sort last, like -1."""
+    return sorted(items, key=lambda i: i.downloads if i.downloads is not None else -1,
+                  reverse=True)[:n]
 
 
 def _with_stats(item: Item, stats: Stats) -> Item:

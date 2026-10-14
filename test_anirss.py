@@ -13,6 +13,7 @@ import pytest
 from anirss_lib import bestfit
 from anirss_lib import config as _cfg
 from anirss_lib.cli import args as _cli_args
+from anirss_lib.errors import QbtError
 from anirss_lib.cli.urls import UrlKind, classify_url, extract_nyaa_query
 from anirss_lib.qbt import feeds as _feeds
 from anirss_lib.qbt import session as _session
@@ -705,15 +706,26 @@ def test_remote_qbt_is_not_started():
     # Nothing to boot on this machine; say so instead of pretending.
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_session, "_qbt_reachable", lambda *a, **k: False)
-        with pytest.raises(SystemExit):
+        with pytest.raises(QbtError):
             _session._ensure_qbt_reachable(_qbt_cfg(url="http://nas.local:8080"))
+
+
+def test_autostart_off_never_launches_local_qbt():
+    # Library/server callers opt out: a backend must not spawn qBittorrent.
+    launched = []
+    with pytest.MonkeyPatch.context() as mp:
+        _patch_qbt_down_then_up(mp, launched)
+        with pytest.raises(QbtError):
+            _session._ensure_qbt_reachable(_qbt_cfg(url="http://localhost:8080"),
+                                           autostart=False)
+    assert launched == []
 
 
 def test_missing_qbt_binary_is_reported():
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_session, "_qbt_reachable", lambda *a, **k: False)
         mp.setattr(_session, "_qbt_start_command", lambda cfg: None)
-        with pytest.raises(SystemExit):
+        with pytest.raises(QbtError):
             _session._ensure_qbt_reachable(_qbt_cfg(url="http://localhost:8080"))
 
 

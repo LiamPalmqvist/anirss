@@ -6,7 +6,7 @@ import urllib.parse
 from typing import NamedTuple
 
 from anirss_lib import nyaa
-from anirss_lib.logging import die
+from anirss_lib.errors import ConfigError, NotFoundError
 from anirss_lib.types import Item
 
 
@@ -22,7 +22,7 @@ class Endpoint(NamedTuple):
 
 
 def load_endpoints(cfg) -> list[Endpoint]:
-    """Validate cfg["endpoint"] into Endpoint objects. Dies on config errors."""
+    """Validate cfg["endpoint"] into Endpoint objects. Raises ConfigError."""
     out: list[Endpoint] = []
     seen: set[str] = set()
     for i, raw in enumerate(cfg.get("endpoint") or [], start=1):
@@ -30,25 +30,25 @@ def load_endpoints(cfg) -> list[Endpoint]:
         kind = str(raw.get("kind") or "").strip()
         url = str(raw.get("url") or "").strip()
         if not name:
-            die(f"[[endpoint]] #{i}: missing `name`")
+            raise ConfigError(f"[[endpoint]] #{i}: missing `name`")
         if name in seen:
-            die(f"[[endpoint]] #{i}: duplicate name {name!r}")
+            raise ConfigError(f"[[endpoint]] #{i}: duplicate name {name!r}")
         seen.add(name)
         if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
-            die(f"[[endpoint]] {name!r}: invalid name "
-                f"(use only letters, digits, '.', '_', '-')")
+            raise ConfigError(f"[[endpoint]] {name!r}: invalid name "
+                              f"(use only letters, digits, '.', '_', '-')")
         if kind not in VALID_KINDS:
-            die(f"[[endpoint]] {name!r}: unknown kind {kind!r} "
-                f"(valid: {', '.join(VALID_KINDS)})")
+            raise ConfigError(f"[[endpoint]] {name!r}: unknown kind {kind!r} "
+                              f"(valid: {', '.join(VALID_KINDS)})")
         if not url:
-            die(f"[[endpoint]] {name!r}: missing `url`")
+            raise ConfigError(f"[[endpoint]] {name!r}: missing `url`")
         if kind == "rss" and "{query}" not in url:
-            die(f"[[endpoint]] {name!r}: rss url must contain a {{query}} placeholder")
+            raise ConfigError(f"[[endpoint]] {name!r}: rss url must contain a {{query}} placeholder")
         out.append(Endpoint(name=name, kind=kind, url=url,
                             category=str(raw.get("category") or "1_0"),
                             filter=str(raw.get("filter") or "0")))
     if not out:
-        die("no [[endpoint]] configured")  # load_config synthesizes, so: unreachable
+        raise ConfigError("no [[endpoint]] configured")  # load_config synthesizes, so: unreachable
     return out
 
 
@@ -63,9 +63,9 @@ class EndpointState:
             found = self.by_name(active_name)
             if found is None:
                 names = ", ".join(e.name for e in endpoints)
-                die(f"unknown endpoint {active_name!r} (configured: {names})")
-            else:
-                self.active = found
+                raise NotFoundError(
+                    f"unknown endpoint {active_name!r} (configured: {names})")
+            self.active = found
 
     def by_name(self, name: str) -> Endpoint | None:
         return next((e for e in self.endpoints if e.name == name), None)
@@ -164,6 +164,22 @@ def subscription_feed(ep: Endpoint, query: str, items: list[Item]
         return search_url(ep, positive), " ".join(quality), excluded
     url, excluded = feed_url(ep, query)
     return url, "", excluded
+
+
+class SubscriptionSpec(NamedTuple):
+    """Everything a qB subscription for (endpoint, query) needs."""
+    feed_url: str
+    must_contain: str
+    must_not_contain: str   # qB's "|"-joined exclusion list
+    endpoint_name: str
+
+
+def build_subscription(ep: Endpoint, query: str, items: list[Item]
+                       ) -> SubscriptionSpec:
+    """subscription_feed() packaged for actions.subscribe_rule. May cost one
+    probe request (erai per-show feed resolution)."""
+    url, must, excluded = subscription_feed(ep, query, items)
+    return SubscriptionSpec(url, must, "|".join(excluded), ep.name)
 
 
 def filter_excluded(items: list[Item], terms: list[str]) -> list[Item]:

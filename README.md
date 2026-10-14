@@ -175,3 +175,20 @@ Both packages (Brew, AUR) install a `zsh` completion at `…/zsh/site-functions/
 ### Note: bare-URL behavior changed in v0.2.0
 
 In v0.1.0, `anirss <nyaa-rss-url>` subscribed to the URL directly. In v0.2.0, it instead extracts the `q=` parameter and runs it as a fresh search — useful for "share a link, repeat the search" workflows. To subscribe explicitly, use `anirss -S <url>`. Pasting a non-nyaa URL will print an error pointing you at `-S`.
+
+## Using anirss as a backend
+
+anirss can be imported as a Python library or run as a JSON HTTP server for GUIs and other apps. The integration docs live in [docs/agents/](docs/agents/README.md). They are written mainly for coding agents implementing against anirss; if the project grows, human-facing docs will be hosted on a proper docs site instead.
+
+```python
+from anirss_lib.api import Anirss
+
+ani = Anirss()                                  # reads ~/.config/anirss/config.toml
+res = ani.search("Frieren 1080p")
+ani.subscribe(res.query, endpoint=res.endpoint, items=res.items)
+```
+
+```sh
+anirss --serve                                  # prints the bearer token on first start
+curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8787/api/v1/search?q=Frieren+1080p"
+```

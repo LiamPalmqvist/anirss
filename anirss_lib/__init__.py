@@ -47,6 +47,12 @@ Other:
     anirss --migrate-config       Append any new default sections to your config.toml.
     anirss --version              Print version and exit.
 
+Backend (for frontends and other apps; see docs/agents/):
+    anirss --serve [--host H] [--port P]
+                                  Serve the JSON HTTP API (default 127.0.0.1:8787,
+                                  config [server]). Bearer token: see docs/agents/.
+    Python: `from anirss_lib.api import Anirss`.
+
 Config: ~/.config/anirss/config.toml (auto-created on first run).
 State:  ~/.local/state/anirss/   (feeds.txt cache, qbt.sid session cookie, anirss.log)
 """

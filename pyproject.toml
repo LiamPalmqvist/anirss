@@ -1,0 +1,35 @@
+# Packaging metadata so other projects can depend on anirss:
+#   pip install "anirss @ git+https://github.com/marcusbandit/anirss"
+# The repo still needs no build step: ./anirss, install.sh, AUR and brew run
+# straight from the checkout and ignore this file.
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anirss"
+dynamic = ["version"]
+description = "Search nyaa.si and other anime RSS endpoints, then subscribe or download through qBittorrent. CLI, Python library, and JSON HTTP API."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+proctitle = ["setproctitle"]
+
+[project.scripts]
+anirss = "anirss_lib.main:main"
+
+[project.urls]
+Homepage = "https://github.com/marcusbandit/anirss"
+
+[tool.setuptools]
+packages = ["anirss_lib", "anirss_lib.cli", "anirss_lib.qbt"]
+
+[tool.setuptools.package-data]
+anirss_lib = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = { attr = "anirss_lib.__version__" }
