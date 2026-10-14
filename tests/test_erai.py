@@ -105,7 +105,7 @@ def test_feed_url_erai_strips_quality_tokens():
 def test_fetch_items_erai_searches_clean_and_filters_quality(monkeypatch):
     urls = []
 
-    def fake_fetch_rss(url, endpoint_name="feed"):
+    def fake_fetch_rss(url, endpoint_name="feed", timeout=10.0):
         urls.append(url)
         return [
             Item("Ranma - 01 [1080p NF WEB-DL AVC AAC][Airing]", "dl",
@@ -221,3 +221,61 @@ def test_subscription_feed_non_erai_unchanged():
     assert url == endpoints.feed_url(NYAA_EP, "show -bad")[0]
     assert must == ""
     assert excluded == []
+
+
+# The two releases Erai's feed carries for every episode (Kyoufu Collector,
+# whose `kyoufu 1080p` rule downloaded both).
+KYOUFU_AVC = ("[Torrent] Kyoufu Collector - 01 [1080p CR WEB-DL AVC AAC]"
+              "[us][br][mx][es][sa][fr][de][it][ru][pl][Airing]")
+KYOUFU_HEVC = ("[Torrent] Kyoufu Collector - 01 (HEVC) [1080p CR WEBRip HEVC "
+               "AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Encoded]")
+
+
+def _qb_accepts(title, must, excluded):
+    """qB's non-regex rule match: every mustContain token and none of the
+    mustNotContain expressions, as case-insensitive substrings."""
+    lc = title.lower()
+    return (all(t.lower() in lc for t in must.split())
+            and not any(x.lower() in lc for x in excluded))
+
+
+def test_variant_exclusions_neutral_query_drops_the_encode():
+    assert erai.variant_exclusions("Kyoufu 1080p") == ["HEVC"]
+    # WEB alone matches both WEB-DL and WEBRip, so it picks nothing.
+    assert erai.variant_exclusions("Show WEB AAC") == ["HEVC"]
+
+
+def test_variant_exclusions_respects_a_picked_variant():
+    for query in ("Show 1080p WEB-DL", "Show HEVC", "Show webrip",
+                  "Show -hevc", 'Show -"WEB-DL"', "Show x265", "Show AVC"):
+        assert erai.variant_exclusions(query) == [], query
+
+
+def test_subscription_feed_per_show_downloads_one_release_per_episode(
+        monkeypatch):
+    monkeypatch.setattr(erai, "resolve_show_feed",
+                        lambda ep, items, fetch=None: "https://e/f")
+    _, must, excluded = endpoints.subscription_feed(
+        ERAI_EP, "kyoufu 1080p", [])
+    assert excluded == ["HEVC"]
+    kept = [t for t in (KYOUFU_AVC, KYOUFU_HEVC)
+            if _qb_accepts(t, must, excluded)]
+    assert kept == [KYOUFU_AVC]
+
+
+def test_subscription_feed_hevc_query_keeps_only_the_encode(monkeypatch):
+    monkeypatch.setattr(erai, "resolve_show_feed",
+                        lambda ep, items, fetch=None: "https://e/f")
+    _, must, excluded = endpoints.subscription_feed(
+        ERAI_EP, "kyoufu 1080p HEVC", [])
+    assert excluded == []
+    kept = [t for t in (KYOUFU_AVC, KYOUFU_HEVC)
+            if _qb_accepts(t, must, excluded)]
+    assert kept == [KYOUFU_HEVC]
+
+
+def test_subscription_feed_search_fallback_also_drops_the_encode(monkeypatch):
+    monkeypatch.setattr(erai, "resolve_show_feed",
+                        lambda ep, items, fetch=None: None)
+    _, _, excluded = endpoints.subscription_feed(ERAI_EP, "Ranma 1080p", [])
+    assert excluded == ["HEVC"]

@@ -141,6 +141,7 @@ def fzf_pick_with_query(options: list[str], header: str,
 
 def fzf_search_prompt(prompt_label: str, *, default: str = "",
                       endpoint_name: str = "", switch_hint: bool = False,
+                      slow: bool = False,
                       ) -> tuple[str | None, str]:
     """Live search via fzf against the active endpoint. Returns
     (query_or_None, key) with key in
@@ -155,7 +156,8 @@ def fzf_search_prompt(prompt_label: str, *, default: str = "",
     commands as `--_endpoint <name>` so the live search hits the active
     endpoint instead of the first configured one, and is named in the
     header. `switch_hint` appends the Ctrl-E endpoint-switch hint to the
-    header when there's more than one endpoint to switch between.
+    header when there's more than one endpoint to switch between. `slow`
+    warns that results take a while (on-demand endpoints).
     """
     from anirss_lib.readline_input import prompt as readline_prompt
     history_file = _history_path("search")
@@ -182,6 +184,8 @@ def fzf_search_prompt(prompt_label: str, *, default: str = "",
     )
     if switch_hint:
         header += f" · {C_BLD}Ctrl-E{C_OFF} endpoint"
+    if slow:
+        header += f"\n{endpoint_name} answers slowly: results can take ~30s to show up"
 
     fzf_args = [
         "fzf", "--ansi",

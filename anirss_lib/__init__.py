@@ -45,6 +45,9 @@ Other:
     anirss --no-seed              Set qBittorrent to pause torrents at ratio 0.
     anirss --config               Print the resolved config and exit.
     anirss --migrate-config       Append any new default sections to your config.toml.
+    anirss --refresh-on-demand    Start on-demand endpoints that have subscriptions,
+                                  let qBittorrent poll them, stop them again.
+                                  (run hourly by anirss-on-demand.timer)
     anirss --version              Print version and exit.
 
 Backend (for frontends and other apps; see docs/agents/):

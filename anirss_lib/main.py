@@ -5,7 +5,7 @@ import os
 import sys
 
 import anirss_lib
-from anirss_lib import erai, proctitle, responsive, terminal
+from anirss_lib import erai, ondemand, proctitle, responsive, terminal
 from anirss_lib.ansi import (
     C_BLD, C_DIM, C_GRN, C_OFF, C_YEL, FILTER_PICKER_LINES,
     right_anchor,
@@ -36,6 +36,7 @@ from anirss_lib.qbt.actions import (
     do_download, do_movie, do_subscribe, do_upload_local_torrent,
 )
 from anirss_lib.qbt.feeds import maybe_refresh_feed_cache
+from anirss_lib.qbt.refresh import cmd_refresh_on_demand, settle
 from anirss_lib.qbt.session import apply_no_seed, login_with_password, login_with_retry
 from anirss_lib.readline_input import get_name, setup_readline
 from anirss_lib.refine import refine
@@ -49,17 +50,62 @@ from anirss_lib.types import Item
 _pick_top_n = stats_mod.top_by_downloads
 
 
-def _save_base_for(parsed: "ParsedArgs", cfg: "AnirssConfig") -> str:
+def _save_base_for(parsed: "ParsedArgs", cfg: "AnirssConfig",
+                   ep: Endpoint | None = None) -> str:
     """Pick the destination root: hidden_base when `h` modifier is set
-    (e.g. -Sh, -Th), otherwise the regular save_base."""
+    (e.g. -Sh, -Th), otherwise the endpoint's own save_base, otherwise the
+    regular one."""
     if parsed.hidden:
         return cfg["downloads"]["hidden_base"]
+    if ep is not None and ep.save_base:
+        return ep.save_base
     return cfg["downloads"]["save_base"]
 
 
-def _tags_for(cfg: "AnirssConfig") -> list[str]:
+def _movie_path_for(cfg: "AnirssConfig", ep: Endpoint | None = None) -> str:
+    if ep is not None and ep.movie_path:
+        return ep.movie_path
+    return cfg["downloads"]["movie_path"]
+
+
+def _tags_for(cfg: "AnirssConfig", ep: Endpoint | None = None) -> list[str]:
     """Tags stamped on every torrent and RSS rule anirss creates."""
+    if ep is not None and ep.tags is not None:
+        return list(ep.tags)
     return list(cfg["qbittorrent"].get("tags") or [])
+
+
+def _resolve_links(links: list[str], endpoints: list[Endpoint]) -> list[str]:
+    """Hand qB magnets instead of links that need an on-demand service."""
+    if not any(ep.on_demand for ep in endpoints):
+        return links
+    resolved = ondemand.resolve_links(links, endpoints)
+    if resolved != links:
+        n = sum(1 for a, b in zip(links, resolved) if a != b)
+        print(f"{C_DIM}resolved {n} link(s) to magnets{C_OFF}")
+    return resolved
+
+
+def _settle_subscription(qbt, ep: Endpoint | None, feed_path: str) -> None:
+    """An on-demand feed only works while its service is up: give qB the
+    chance to fetch it and grab the current matches before we let go."""
+    if ep is None or not ep.on_demand:
+        return
+    print(f"{C_DIM}{ep.name}: letting qBittorrent fetch the feed and grab "
+          f"matches...{C_OFF}")
+    added = settle(qbt, [feed_path])
+    print(f"{C_DIM}{ep.name}: {added} torrent(s) added{C_OFF}")
+
+
+def _ensure_url_owner(url: str, endpoints: list[Endpoint]) -> Endpoint | None:
+    """Start the on-demand endpoint a pasted feed URL belongs to, if any."""
+    owner = endpoints_mod.owner_of(endpoints, url)
+    if owner is not None and owner.on_demand:
+        try:
+            ondemand.ensure(owner)
+        except FetchError as e:
+            die(str(e))
+    return owner
 
 
 def _resolve_password(*, password_stdin: bool) -> str | None:
@@ -112,14 +158,14 @@ def _print_search_rss_rows(query: str, ep: Endpoint,
             printed += 1
 
     try:
-        print_rows(endpoints_mod.fetch_items(ep, query))
+        print_rows(endpoints_mod.fetch_items(ep, query, boot=False))
     except FetchError as e:
         print(f"{C_DIM}{e}{C_OFF}")
     for other in (e for e in endpoints if e.name != ep.name):
         if printed >= visible:
             break
         try:
-            found = endpoints_mod.fetch_items(other, query)
+            found = endpoints_mod.fetch_items(other, query, boot=False)
         except FetchError:
             continue
         if found:
@@ -159,6 +205,9 @@ def _handle_meta_flags(argv: list[str], cfg: AnirssConfig) -> bool:
     if a == "--serve":
         from anirss_lib.server import serve
         serve(argv[1:], cfg)
+    if a == "--refresh-on-demand":
+        init_log(cfg["logging"]["log_path"])
+        cmd_refresh_on_demand(cfg["qbittorrent"], load_endpoints(cfg))
         return True
     return False
 
@@ -242,11 +291,17 @@ def _run_search_state_machine(initial_query: str, cfg: AnirssConfig,
         # renders into a clean alt-screen frame.
         terminal.clear_screen()
         if state == "search":
+            if eps.active.on_demand:
+                try:
+                    ondemand.ensure(eps.active)
+                except FetchError as e:
+                    print(f"{C_YEL}{e}{C_OFF}")
             prompt_label = f"{C_YEL}{eps.active.name} >{C_OFF} "
             result, key = fzf_search_prompt(
                 prompt_label, default=last_search_query,
                 endpoint_name=eps.active.name,
-                switch_hint=len(eps.endpoints) > 1)
+                switch_hint=len(eps.endpoints) > 1,
+                slow=eps.active.on_demand)
             if key == "ctrl-e":
                 if result:
                     last_search_query = result
@@ -261,7 +316,9 @@ def _run_search_state_machine(initial_query: str, cfg: AnirssConfig,
         if state == "fetch":
             print(f"{C_BLD}Query:{C_OFF} "
                   f"{erai.render_query(initial_query, eps.active)}")
-            print(f"{C_DIM}fetching {eps.active.name}...{C_OFF}")
+            slow = (f" {C_DIM}(can take up to {eps.active.timeout:.0f}s){C_OFF}"
+                    if eps.active.on_demand else "")
+            print(f"{C_DIM}fetching {eps.active.name}...{C_OFF}{slow}")
             prev_name = eps.active.name
             reason = "0 results"
             try:
@@ -352,9 +409,11 @@ def _run_noninteractive(parsed: ParsedArgs, cfg: AnirssConfig, eps: EndpointStat
     sub_endpoint_name = ""
     must_not_contain = ""
     must_contain = ""
+    source: Endpoint | None = None
     if force_url is not None:
+        source = _ensure_url_owner(force_url, eps.endpoints)
         try:
-            items = fetch_rss(force_url)
+            items = fetch_rss(force_url, timeout=source.timeout if source else 10.0)
         except FetchError as e:
             die(str(e))
         if not items:
@@ -378,38 +437,40 @@ def _run_noninteractive(parsed: ParsedArgs, cfg: AnirssConfig, eps: EndpointStat
                                                                 initial_query)
         sub_endpoint_name = eps.active.name
         must_not_contain = "|".join(excluded)
+        source = eps.active
     else:
         die("non-interactive action requires a query or -S <url>")
 
     default_name = parsed.name or show_name(items[0].title) or initial_query or "anirss"
     qbt = _login_for(parsed, cfg)
+    save_base = _save_base_for(parsed, cfg, source)
+    tags = _tags_for(cfg, source)
 
     if parsed.subscribe:
-        do_subscribe(qbt, feed_url_for_sub, default_name, _save_base_for(parsed, cfg),
-                     endpoint_name=sub_endpoint_name,
-                     must_not_contain=must_not_contain,
-                     must_contain=must_contain,
-                     tags=_tags_for(cfg))
+        name = do_subscribe(qbt, feed_url_for_sub, default_name, save_base,
+                            endpoint_name=sub_endpoint_name,
+                            must_not_contain=must_not_contain,
+                            must_contain=must_contain,
+                            tags=tags)
         if must_not_contain:
             print(f"{C_DIM}exclusions apply via the qB rule (mustNotContain): "
                   f"{must_not_contain}{C_OFF}")
+        _settle_subscription(qbt, source, name)
     elif parsed.download_all:
-        links = [it.link for it in items]
-        do_download(qbt, links, default_name, _save_base_for(parsed, cfg),
-                    tags=_tags_for(cfg))
+        links = _resolve_links([it.link for it in items], eps.endpoints)
+        do_download(qbt, links, default_name, save_base, tags=tags)
     elif parsed.download_n is not None:
         # "Top N" ranks by downloads — scrape real counts first when the
         # feed didn't carry them (otherwise every rank is a fake tie at 0).
         items = stats_mod.enrich(items)
         chosen = _pick_top_n(items, parsed.download_n)
-        links = [it.link for it in chosen]
-        do_download(qbt, links, default_name, _save_base_for(parsed, cfg),
-                    tags=_tags_for(cfg))
+        links = _resolve_links([it.link for it in chosen], eps.endpoints)
+        do_download(qbt, links, default_name, save_base, tags=tags)
     elif parsed.movie:
         items = stats_mod.enrich(items)
         top = _pick_top_n(items, 1)[0]
-        do_movie(qbt, top.title, top.link, cfg["downloads"]["movie_path"],
-                 tags=_tags_for(cfg))
+        link = _resolve_links([top.link], eps.endpoints)[0]
+        do_movie(qbt, top.title, link, _movie_path_for(cfg, source), tags=tags)
 
     maybe_refresh_feed_cache(qbt)
     log("INFO", "done (non-interactive)")
@@ -447,6 +508,7 @@ def _run_interactive(initial_query: str, force_url: str | None,
     local_torrent_path: str | None = None
     movie_choice: Item | None = None
     default_name: str | None = None
+    source: Endpoint | None = None
 
     # `-T <path>` short-circuits URL handling entirely: path was already
     # validated by _handle_op_flag.
@@ -491,9 +553,11 @@ def _run_interactive(initial_query: str, force_url: str | None,
         with terminal.alt_screen():
             if force_url is not None:
                 print(f"{C_BLD}Subscribe URL:{C_OFF} {force_url}")
+                source = _ensure_url_owner(force_url, eps.endpoints)
                 print(f"{C_DIM}fetching feed...{C_OFF}")
                 try:
-                    items = fetch_rss(force_url)
+                    items = fetch_rss(force_url,
+                                      timeout=source.timeout if source else 10.0)
                 except FetchError as e:
                     die(str(e))
                 if not items:
@@ -524,6 +588,7 @@ def _run_interactive(initial_query: str, force_url: str | None,
                 query, selected, action = _run_search_state_machine(initial_query, cfg, eps)
                 if action == ACT_CANCEL:
                     return
+                source = eps.active
                 default_name = initial_query or "anirss"
                 if selected:
                     default_name = show_name(selected[0].title) or default_name
@@ -551,8 +616,8 @@ def _run_interactive(initial_query: str, force_url: str | None,
     log("INFO", f"name={name!r} feed={feed_url!r} downloads={n_dl} movie={movie_title_log}")
 
     qbt = _login_for(parsed, cfg)
-    save_base = _save_base_for(parsed, cfg)
-    tags = _tags_for(cfg)
+    save_base = _save_base_for(parsed, cfg, source)
+    tags = _tags_for(cfg, source)
     hidden_tag = f" {C_DIM}(hidden){C_OFF}" if parsed.hidden else ""
     summary: str | None = None
     if feed_url:
@@ -566,7 +631,9 @@ def _run_interactive(initial_query: str, force_url: str | None,
         if must_not_contain:
             summary += (f"\n{C_DIM}exclusions apply via the qB rule "
                        f"(mustNotContain): {must_not_contain}{C_OFF}")
+        _settle_subscription(qbt, source, name)
     elif download_links:
+        download_links = _resolve_links(download_links, eps.endpoints)
         do_download(qbt, download_links, name, save_base, tags=tags)
         plural = "" if n_dl == 1 else "s"
         summary = (f"{C_GRN}✓{C_OFF} Downloaded {C_BLD}{n_dl}{C_OFF} "
@@ -577,8 +644,9 @@ def _run_interactive(initial_query: str, force_url: str | None,
                    f"{C_BLD}{os.path.basename(local_torrent_path)}{C_OFF}"
                    f" → {C_BLD}{name}{C_OFF}{hidden_tag}")
     elif movie_choice:
-        do_movie(qbt, movie_choice.title, movie_choice.link,
-                 cfg["downloads"]["movie_path"], tags=tags)
+        link = _resolve_links([movie_choice.link], eps.endpoints)[0]
+        do_movie(qbt, movie_choice.title, link,
+                 _movie_path_for(cfg, source), tags=tags)
         summary = f"{C_GRN}✓{C_OFF} Movie: {C_BLD}{movie_choice.title}{C_OFF}"
 
     maybe_refresh_feed_cache(qbt)
