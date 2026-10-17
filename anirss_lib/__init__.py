@@ -60,4 +60,4 @@ Config: ~/.config/anirss/config.toml (auto-created on first run).
 State:  ~/.local/state/anirss/   (feeds.txt cache, qbt.sid session cookie, anirss.log)
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"

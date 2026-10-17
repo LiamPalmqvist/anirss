@@ -313,7 +313,20 @@ def load_config(path: Path | None = None, *, bootstrap: bool = True,
             print(f"{C_DIM}wrote default config: {path} (edit it!){C_OFF}", file=sys.stderr)
         except OSError as e:
             print(f"{C_YEL}warning: couldn't create {path}: {e}{C_OFF}", file=sys.stderr)
+    _env_overrides(cfg)
     return _finish(cfg, user_cfg)
+
+
+# An app that runs anirss beside a qBittorrent it manages itself (AniBeam does)
+# names that client here, without rewriting the user's config file.
+QBT_ENV = (("url", "ANIRSS_QBT_URL"), ("username", "ANIRSS_QBT_USERNAME"))
+
+
+def _env_overrides(cfg: AnirssConfig) -> None:
+    for key, name in QBT_ENV:
+        value = os.environ.get(name, "").strip()
+        if value:
+            cfg["qbittorrent"][key] = value
 
 
 def build_config(user_cfg: dict | None = None) -> AnirssConfig:
