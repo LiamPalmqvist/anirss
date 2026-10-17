@@ -63,3 +63,18 @@ def test_load_config_missing_file_still_has_endpoint(tmp_path, monkeypatch):
     cfg = config.load_config()
     assert cfg["endpoint"][0]["name"] == "nyaa"
     assert cfg["endpoint"][0]["url"] == "https://nyaa.si/"
+
+
+def test_load_config_takes_the_qbittorrent_address_from_the_environment(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    path.write_text('[qbittorrent]\nurl = "http://localhost:8080"\nusername = "admin"\n')
+    monkeypatch.setenv("ANIRSS_QBT_URL", "http://127.0.0.1:47321")
+    monkeypatch.setenv("ANIRSS_QBT_USERNAME", "anibeam")
+    cfg = config.load_config(path, bootstrap=False)
+    assert cfg["qbittorrent"]["url"] == "http://127.0.0.1:47321"
+    assert cfg["qbittorrent"]["username"] == "anibeam"
+    monkeypatch.setenv("ANIRSS_QBT_URL", " ")
+    monkeypatch.delenv("ANIRSS_QBT_USERNAME")
+    cfg = config.load_config(path, bootstrap=False)
+    assert cfg["qbittorrent"]["url"] == "http://localhost:8080"
+    assert cfg["qbittorrent"]["username"] == "admin"

@@ -261,7 +261,10 @@ beyond loopback, put a TLS reverse proxy in front.
 The server builds its `Anirss` with default options: it never autostarts
 qBittorrent, does not persist the session cookie, and takes the qBittorrent
 password from `ANIRSS_QBT_PASSWORD` or the saved password file. Set the
-variable in the environment of the `anirss --serve` process. If qBittorrent
+variable in the environment of the `anirss --serve` process.
+`ANIRSS_QBT_URL` and `ANIRSS_QBT_USERNAME` override `[qbittorrent] url` and
+`username` from the config file the same way, for a client that runs its own
+qBittorrent beside anirss. If qBittorrent
 needs a login and none is available, qBittorrent routes return `503
 qbt_auth_required`.
 
@@ -443,7 +446,7 @@ No auth. The Host guard still applies.
 curl $BASE/health
 ```
 ```json
-{"ok": true, "version": "0.4.0"}
+{"ok": true, "version": "0.4.1"}
 ```
 
 #### GET /qbt/status
