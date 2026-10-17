@@ -443,7 +443,7 @@ No auth. The Host guard still applies.
 curl $BASE/health
 ```
 ```json
-{"ok": true, "version": "0.3.4"}
+{"ok": true, "version": "0.4.0"}
 ```
 
 #### GET /qbt/status
