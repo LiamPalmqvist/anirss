@@ -525,6 +525,12 @@ def login_with_password(qbt_cfg: QbtConfig, password: str, *,
     if not password and qbt_cfg["save_password"]:
         password = _load_password() or ""
     if not password:
+        # A WebUI that skips the login for this client (localhost auth off, or
+        # a whitelisted subnet) answers without any session at all.
+        sess = QbtSession(_make_qbt_opener(qbt_cfg["url"])[0], qbt_cfg["url"])
+        if sess.is_alive():
+            log("INFO", "qBittorrent needs no login from here")
+            return sess
         raise QbtAuthError("qBittorrent login required (set ANIRSS_QBT_PASSWORD, use "
             "--password-stdin, or save a password from an interactive run)")
     qbt, err = qbt_login(qbt_cfg["url"], qbt_cfg["username"], password,
