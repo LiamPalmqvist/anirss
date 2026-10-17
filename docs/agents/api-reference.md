@@ -446,7 +446,7 @@ No auth. The Host guard still applies.
 curl $BASE/health
 ```
 ```json
-{"ok": true, "version": "0.4.1"}
+{"ok": true, "version": "0.4.2"}
 ```
 
 #### GET /qbt/status
