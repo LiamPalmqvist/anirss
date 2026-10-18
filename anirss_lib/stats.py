@@ -237,18 +237,64 @@ def _scrape_tracker(announce: str, hashes: list[bytes]) -> dict[bytes, Stats]:
 
 # ---- .torrent downloads + cache ----
 
+# What a URL path may hold raw: RFC 3986 pchar, plus '/' and '%' so an
+# already-encoded URL passes through unchanged. A query may also hold '?'.
+_PATH_SAFE = "/%:@!$&'()*+,;="
+_QUERY_SAFE = _PATH_SAFE + "?"
+
+
+def encode_http_link(link: str) -> str:
+    """Percent-encode what an http(s) URL can't hold raw.
+
+    Feed <link>s carry raw spaces and brackets (t.erai-raws.info does). The
+    host is left alone so an IPv6 literal keeps its brackets. Raises
+    ValueError on a malformed host, e.g. an unclosed '['."""
+    parts = urllib.parse.urlsplit(link)
+    return urllib.parse.urlunsplit(parts._replace(
+        path=urllib.parse.quote(parts.path, safe=_PATH_SAFE),
+        query=urllib.parse.quote(parts.query, safe=_QUERY_SAFE),
+        fragment=urllib.parse.quote(parts.fragment, safe=_QUERY_SAFE)))
+
+
 def _fetch_torrent(url: str, timeout: float = TORRENT_TIMEOUT) -> bytes | None:
-    # Feed <link> elements carry raw spaces/brackets (t.erai-raws.info does);
-    # urllib refuses control chars, so percent-encode what a URL can't hold.
-    # '%' stays safe so already-encoded URLs pass through unchanged.
-    fetch_url = urllib.parse.quote(url, safe=":/%")
     try:
-        req = urllib.request.Request(fetch_url, headers={"User-Agent": _USER_AGENT})
+        req = urllib.request.Request(encode_http_link(url),
+                                     headers={"User-Agent": _USER_AGENT})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
     except Exception as e:
         log("WARN", f"torrent download failed ({url.split('?')[0]}): {e}")
         return None
+
+
+def fetch_torrents(urls: list[str], *, deadline_s: float) -> dict[str, bytes]:
+    """The .torrent bytes behind each URL, DOWNLOAD_WORKERS at a time.
+
+    A URL that fails, misses the deadline or isn't a torrent is left out.
+    Each attempt's own timeout shrinks with the time that's left, so even a
+    fully stalled server can only cost about deadline_s in total."""
+    deadline = time.monotonic() + deadline_s
+    out: dict[str, bytes] = {}
+    with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as pool:
+        futures = {
+            pool.submit(_fetch_torrent, url,
+                        max(0.5, deadline - time.monotonic())): url
+            for url in dict.fromkeys(urls)
+        }
+        try:
+            for fut in as_completed(futures,
+                                    timeout=max(1.0, deadline - time.monotonic())):
+                try:
+                    data = fut.result()
+                    if data:
+                        info_hash(data)
+                        out[futures[fut]] = data
+                except Exception:
+                    continue
+        except TimeoutError:
+            for fut in futures:
+                fut.cancel()
+    return out
 
 
 _MEM_CACHE: dict[str, tuple[float, Stats]] = {}
@@ -337,33 +383,14 @@ def enrich(items: list[Item], *, deadline_s: float = 20.0) -> list[Item]:
         return [it if i not in resolved else _with_stats(it, resolved[i])
                 for i, it in enumerate(items)]
 
-    # Download the missing .torrent files in parallel, honoring the deadline:
-    # each attempt's own timeout shrinks with the time that's left, so even
-    # a fully stalled server can only cost about deadline_s in total.
+    # Download the missing .torrent files in parallel, honoring the deadline.
     facts: dict[str, tuple[bytes, list[str]]] = {}
-    with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as pool:
-        futures = {
-            pool.submit(_fetch_torrent, url,
-                        max(0.5, deadline - time.monotonic())): url
-            for url in by_url
-        }
+    fetched = fetch_torrents(list(by_url), deadline_s=deadline - time.monotonic())
+    for url, data in fetched.items():
         try:
-            for fut in as_completed(futures,
-                                    timeout=max(1.0, deadline - time.monotonic())):
-                url = futures[fut]
-                try:
-                    data = fut.result()
-                except Exception:
-                    data = None
-                if not data:
-                    continue
-                try:
-                    facts[url] = torrent_facts(data)
-                except ValueError:
-                    continue
-        except TimeoutError:
-            for fut in futures:
-                fut.cancel()
+            facts[url] = torrent_facts(data)
+        except ValueError:
+            continue
 
     # Scrape per tracker in announce-priority order until everything lands.
     pending: dict[bytes, list[str]] = {}   # infohash -> announce URLs to try

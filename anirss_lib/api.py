@@ -66,6 +66,9 @@ T = TypeVar("T")
 _ENRICH_SLOTS = threading.BoundedSemaphore(2)
 
 LINK_SCHEMES = ("magnet:", "http://", "https://")
+# How long download() spends fetching .torrent files before handing the rest
+# to qB as URLs. AniBeam waits 60s for the whole call.
+FETCH_DEADLINE_S = 20.0
 LOGIN_COOLDOWN_S = 300
 
 
@@ -148,24 +151,6 @@ def endpoint_info(ep: Endpoint) -> dict:
             "client_side_refine": refinement.is_client_side(ep)}
 
 
-# What a URL path may hold raw: RFC 3986 pchar, plus '/' and '%' so an
-# already-encoded URL passes through unchanged. A query may also hold '?'.
-_PATH_SAFE = "/%:@!$&'()*+,;="
-_QUERY_SAFE = _PATH_SAFE + "?"
-
-
-def _encode_http_link(link: str) -> str:
-    """Percent-encode what an http(s) URL can't hold raw.
-
-    Feed <link>s carry raw spaces and brackets (t.erai-raws.info does). The
-    host is left alone so an IPv6 literal keeps its brackets."""
-    parts = urllib.parse.urlsplit(link)
-    return urllib.parse.urlunsplit(parts._replace(
-        path=urllib.parse.quote(parts.path, safe=_PATH_SAFE),
-        query=urllib.parse.quote(parts.query, safe=_QUERY_SAFE),
-        fragment=urllib.parse.quote(parts.fragment, safe=_QUERY_SAFE)))
-
-
 def _check_link(link: object) -> str | None:
     """The link as qB should get it, or None when it can't be sent."""
     if (not isinstance(link, str) or not link.startswith(LINK_SCHEMES)
@@ -173,7 +158,7 @@ def _check_link(link: object) -> str | None:
         return None
     if link.startswith(("http://", "https://")):
         try:
-            link = _encode_http_link(link)
+            link = stats_mod.encode_http_link(link)
         except ValueError:              # malformed host, e.g. an unclosed '['
             return None
     # qB takes `urls` newline-separated, so whitespace left inside one link
@@ -446,8 +431,7 @@ class Anirss:
         """Add magnet / http(s) .torrent links now, into save_base/<name>."""
         links = _check_links(links)
         save_path = os.path.join(self._save_base(hidden), validate_name(name))
-        return self._with_qbt(lambda q: actions.add_links(q, links, save_path,
-                                                          self._tags()))
+        return self._add_links(links, save_path)
 
     def download_items(self, items: list[Item], *, name: str | None = None,
                        hidden: bool = False) -> AddResult:
@@ -461,9 +445,19 @@ class Anirss:
     def movie(self, link: str) -> AddResult:
         """Add one torrent straight into [downloads].movie_path (no subdir)."""
         links = _check_links([link])
-        movie_path = self.config["downloads"]["movie_path"]
-        return self._with_qbt(lambda q: actions.add_links(q, links, movie_path,
-                                                          self._tags()))
+        return self._add_links(links, self.config["downloads"]["movie_path"])
+
+    def _add_links(self, links: list[str], save_path: str) -> AddResult:
+        # qB fetches every `urls=` link at once over one HTTP/2 connection,
+        # and a host that caps concurrent streams (t.erai-raws.info allows
+        # 8) refuses the rest. So anirss fetches the .torrent files itself,
+        # outside the qB lock, and uploads them; a link it can't fetch still
+        # goes to qB as a URL.
+        torrents = stats_mod.fetch_torrents(
+            [link for link in links if link.startswith(("http://", "https://"))],
+            deadline_s=FETCH_DEADLINE_S)
+        return self._with_qbt(lambda q: actions.add_links(
+            q, links, save_path, self._tags(), torrents=torrents))
 
     def upload_torrent(self, data: bytes, *, file_name: str = "file.torrent",
                        name: str | None = None, hidden: bool = False) -> AddResult:
