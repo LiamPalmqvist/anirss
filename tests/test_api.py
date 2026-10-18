@@ -1122,6 +1122,8 @@ def test_download_hidden_and_no_tags(make):
     "file:///etc/passwd", "ftp://x.example/a.torrent", "/tmp/a.torrent",
     "a.torrent", "javascript:alert(1)", "", " https://x.example/a",
     "data:text/plain,hi", "bc://bt/x", 12345, None,
+    "https://x.example/a\tb.torrent", "magnet:?xt=urn:btih:x&dn=a b",
+    "https://ex ample.com/a.torrent", "http://[::1/a.torrent",
 ])
 def test_download_rejects_non_magnet_non_http_links(make, link):
     e = make()
@@ -1144,6 +1146,33 @@ def test_download_accepts_http_https_and_magnet(make):
     e.ani.download(["http://a.example/x", "https://a.example/y", "magnet:?xt=1"],
                    name="X")
     assert len(e.qbt.posts_to("/api/v2/torrents/add")) == 1
+
+
+def test_download_encodes_raw_spaces_and_brackets_in_feed_links(make):
+    # t.erai-raws.info puts the release name into its <link> verbatim.
+    e = make()
+    e.ani.download([
+        "https://t.erai-raws.info/Torrent/2026/Spring/Mairimashita/[Erai-raws] "
+        "Mairimashita Iruma-kun 4th Season - 24 [1080p CR WEB-DL AVC AAC]"
+        "[MultiSub].mkv.torrent"], name="X")
+    [fields] = e.qbt.posts_to("/api/v2/torrents/add")
+    assert fields["urls"] == (
+        "https://t.erai-raws.info/Torrent/2026/Spring/Mairimashita/%5BErai-raws%5D"
+        "%20Mairimashita%20Iruma-kun%204th%20Season%20-%2024%20%5B1080p%20CR%20"
+        "WEB-DL%20AVC%20AAC%5D%5BMultiSub%5D.mkv.torrent")
+
+
+@pytest.mark.parametrize("link,sent", [
+    ("https://x.example/dl/a%20b.torrent?token=1&q=a+b", None),
+    ("https://user:pw@x.example:8443/a.torrent#f", None),
+    ("http://[::1]:8080/a b.torrent", "http://[::1]:8080/a%20b.torrent"),
+    ("https://x.example/a.torrent?name=a b", "https://x.example/a.torrent?name=a%20b"),
+])
+def test_download_leaves_valid_url_parts_alone(make, link, sent):
+    e = make()
+    e.ani.download([link], name="X")
+    [fields] = e.qbt.posts_to("/api/v2/torrents/add")
+    assert fields["urls"] == (sent or link)
 
 
 def test_download_rejects_newline_smuggled_urls(make):

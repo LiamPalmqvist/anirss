@@ -148,17 +148,47 @@ def endpoint_info(ep: Endpoint) -> dict:
             "client_side_refine": refinement.is_client_side(ep)}
 
 
+# What a URL path may hold raw: RFC 3986 pchar, plus '/' and '%' so an
+# already-encoded URL passes through unchanged. A query may also hold '?'.
+_PATH_SAFE = "/%:@!$&'()*+,;="
+_QUERY_SAFE = _PATH_SAFE + "?"
+
+
+def _encode_http_link(link: str) -> str:
+    """Percent-encode what an http(s) URL can't hold raw.
+
+    Feed <link>s carry raw spaces and brackets (t.erai-raws.info does). The
+    host is left alone so an IPv6 literal keeps its brackets."""
+    parts = urllib.parse.urlsplit(link)
+    return urllib.parse.urlunsplit(parts._replace(
+        path=urllib.parse.quote(parts.path, safe=_PATH_SAFE),
+        query=urllib.parse.quote(parts.query, safe=_QUERY_SAFE),
+        fragment=urllib.parse.quote(parts.fragment, safe=_QUERY_SAFE)))
+
+
+def _check_link(link: object) -> str | None:
+    """The link as qB should get it, or None when it can't be sent."""
+    if (not isinstance(link, str) or not link.startswith(LINK_SCHEMES)
+            or any(ord(c) < 32 or ord(c) == 127 for c in link)):
+        return None
+    if link.startswith(("http://", "https://")):
+        try:
+            link = _encode_http_link(link)
+        except ValueError:              # malformed host, e.g. an unclosed '['
+            return None
+    # qB takes `urls` newline-separated, so whitespace left inside one link
+    # (a magnet, or a host) would smuggle in a second, unchecked one.
+    return None if any(c.isspace() for c in link) else link
+
+
 def _check_links(links: list[str]) -> list[str]:
     if not links:
         raise ValidationError("no links given")
-    # qB takes `urls` newline-separated, so whitespace/control characters
-    # inside one link would smuggle in a second, unchecked one.
-    bad = [link for link in links
-           if not isinstance(link, str) or not link.startswith(LINK_SCHEMES)
-           or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in link)]
-    if bad:
-        raise ValidationError(f"links must be magnet: or http(s) URLs, got {bad[0]!r}")
-    return links
+    checked = [_check_link(link) for link in links]
+    if None in checked:
+        bad = links[checked.index(None)]
+        raise ValidationError(f"links must be magnet: or http(s) URLs, got {bad!r}")
+    return checked
 
 
 class Anirss:
