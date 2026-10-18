@@ -64,6 +64,21 @@ def isolate_state(tmp_path, monkeypatch):
     monkeypatch.delenv("ANIRSS_QBT_PASSWORD", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def fetched(monkeypatch):
+    """What fetch_torrents downloads: nothing unless a test fills in `files`,
+    so links reach qB as URLs and no test touches the network."""
+    files: dict[str, bytes] = {}
+    calls: list[list[str]] = []
+
+    def fake(urls, *, deadline_s):
+        calls.append(list(urls))
+        return {u: files[u] for u in urls if u in files}
+
+    monkeypatch.setattr(stats_mod, "fetch_torrents", fake)
+    return SimpleNamespace(files=files, calls=calls)
+
+
 class FakeQbt:
     """Stand-in for QbtSession: records every call, answers from canned data."""
 
@@ -174,8 +189,8 @@ def _bencode(obj) -> bytes:
     return b"d" + b"".join(_bencode(k) + _bencode(obj[k]) for k in sorted(obj)) + b"e"
 
 
-def _torrent(announce="http://tracker.test/announce"):
-    info = {"length": 5, "name": "x", "piece length": 16384, "pieces": b"\x01" * 20}
+def _torrent(announce="http://tracker.test/announce", name="x"):
+    info = {"length": 5, "name": name, "piece length": 16384, "pieces": b"\x01" * 20}
     top = {"info": info}
     if announce:
         top["announce"] = announce
@@ -1180,6 +1195,56 @@ def test_download_rejects_newline_smuggled_urls(make):
     with pytest.raises(ValidationError):
         e.ani.download(["https://a.example/x.torrent\nfile:///etc/passwd"], name="X")
     assert e.qbt.posts == []
+
+
+def test_download_uploads_fetched_torrents_and_sends_the_rest_as_urls(make, fetched):
+    # qB fetches urls= all at once and t.erai-raws.info refuses more than 8
+    # at a time, so anirss uploads the .torrent files it could fetch itself.
+    a, ha = _torrent(name="a")
+    b, hb = _torrent(name="b")
+    fetched.files.update({"https://x.example/a%20b.torrent": a,
+                          "https://x.example/b.torrent": b})
+    magnet = f"magnet:?xt=urn:btih:{HEX40}"
+    e = make()
+    res = e.ani.download(["https://x.example/a b.torrent", magnet,
+                          "https://x.example/b.torrent",
+                          "https://x.example/gone.torrent"], name="X")
+    assert fetched.calls == [["https://x.example/a%20b.torrent",
+                              "https://x.example/b.torrent",
+                              "https://x.example/gone.torrent"]]
+    ups = [f for _, f in e.qbt.multiparts]
+    assert [f["file_bytes"] for f in ups] == [a, b]
+    assert [f["file_name"] for f in ups] == ["a b.torrent", "b.torrent"]
+    assert {f["savepath"] for f in ups} == {os.path.join(e.save_base, "X")}
+    assert {f["tags"] for f in ups} == {"Anime"}
+    [fields] = e.qbt.posts_to("/api/v2/torrents/add")
+    assert fields["urls"] == f"{magnet}\nhttps://x.example/gone.torrent"
+    assert res.count == 4 and res.hashes == [ha, HEX40, hb]
+
+
+def test_download_skips_torrents_qbt_already_has(make, fetched):
+    # qB answers a duplicate upload with 409, which would abort the rest.
+    a, ha = _torrent(name="a")
+    b, hb = _torrent(name="b")
+    fetched.files.update({"https://x.example/a.torrent": a,
+                          "https://x.example/b.torrent": b,
+                          "https://mirror.example/b.torrent": b})
+    e = make(FakeQbt(torrents=[{"hash": ha}]))
+    res = e.ani.download(["https://x.example/a.torrent", "https://x.example/b.torrent",
+                          "https://mirror.example/b.torrent"], name="X")
+    assert [f["file_bytes"] for _, f in e.qbt.multiparts] == [b]
+    assert e.qbt.posts == []
+    assert res.count == 3 and res.hashes == [ha, hb, hb]
+
+
+def test_movie_uploads_a_fetched_torrent(make, fetched):
+    data, h = _torrent()
+    fetched.files["https://x.example/m.torrent"] = data
+    e = make()
+    res = e.ani.movie("https://x.example/m.torrent")
+    [(_, f)] = e.qbt.multiparts
+    assert f["savepath"] == e.movie_path and e.qbt.posts == []
+    assert res.hashes == [h]
 
 
 def test_download_items_defaults_name_from_show_name(make):

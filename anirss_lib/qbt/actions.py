@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -261,19 +262,48 @@ def subscribe_rule(qbt: QbtSession, feed_url: str, name: str, save_base: str,
 
 
 def add_links(qbt: QbtSession, links: list[str], save_path: str,
-              tags: list[str] | None = None) -> AddResult:
-    """Add magnet / http(s) .torrent links, saving into `save_path`."""
-    body = qbt.post(
-        "/api/v2/torrents/add",
-        urls="\n".join(links),
-        savepath=save_path,
-        **_tags_param(tags),
-    )
-    err = _torrents_add_error(body)
-    if err:
-        raise QbtError(err)
-    hashes = [h for h in (magnet_hash(link) for link in links) if h]
+              tags: list[str] | None = None,
+              torrents: dict[str, bytes] | None = None) -> AddResult:
+    """Add magnet / http(s) .torrent links, saving into `save_path`.
+
+    `torrents` maps a link to its already-downloaded .torrent bytes; those
+    are uploaded instead of sent as URLs. One qB already has is skipped,
+    since qB answers a duplicate upload with HTTP 409."""
+    from anirss_lib.stats import info_hash
+    torrents = torrents or {}
+    file_hashes = {link: info_hash(data).hex() for link, data in torrents.items()}
+    have: set[str] = set()
+    if file_hashes:
+        have = {t.get("hash") for t in qbt.get_json(
+            "/api/v2/torrents/info", hashes="|".join(file_hashes.values()))}
+    urls = []
+    for link in links:
+        h = file_hashes.get(link)
+        if h is None:
+            urls.append(link)
+        elif h not in have:
+            add_torrent_bytes(qbt, torrents[link], _link_file_name(link),
+                              save_path, tags)
+            have.add(h)
+    if urls:
+        body = qbt.post(
+            "/api/v2/torrents/add",
+            urls="\n".join(urls),
+            savepath=save_path,
+            **_tags_param(tags),
+        )
+        err = _torrents_add_error(body)
+        if err:
+            raise QbtError(err)
+    hashes = [h for h in (file_hashes.get(link) or magnet_hash(link)
+                          for link in links) if h]
     return AddResult(len(links), save_path, _clean_tags(tags), hashes)
+
+
+def _link_file_name(link: str) -> str:
+    """The upload's file name: the last path segment of the link."""
+    path = urllib.parse.urlsplit(link).path
+    return urllib.parse.unquote(path.rsplit("/", 1)[-1]) or "file.torrent"
 
 
 def add_torrent_bytes(qbt: QbtSession, data: bytes, file_name: str,
