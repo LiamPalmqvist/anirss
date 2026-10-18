@@ -234,3 +234,38 @@ def test_enrich_respects_deadline(monkeypatch):
     t0 = time.time()
     stats.enrich(items, deadline_s=1.0)
     assert time.time() - t0 < 3.5
+
+
+def test_fetch_torrents_keeps_only_real_torrents(monkeypatch):
+    good = _make_torrent()
+    replies = {"http://h/a": good, "http://h/b": None,
+               "http://h/c": b"<html>checking your browser</html>"}
+    calls = []
+    monkeypatch.setattr(stats, "_fetch_torrent",
+                        lambda url, timeout=10: calls.append(url) or replies[url])
+    got = stats.fetch_torrents(["http://h/a", "http://h/b", "http://h/c", "http://h/a"],
+                               deadline_s=5)
+    assert got == {"http://h/a": good}
+    assert sorted(calls) == ["http://h/a", "http://h/b", "http://h/c"]
+
+
+def test_fetch_torrent_encodes_the_path_but_keeps_the_query(monkeypatch):
+    seen = []
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"d4:infod1:xi1eee"
+
+    def fake_urlopen(req, timeout):
+        seen.append(req.full_url)
+        return Resp()
+
+    monkeypatch.setattr(stats.urllib.request, "urlopen", fake_urlopen)
+    assert stats._fetch_torrent("https://h.example/[G] a b.torrent?token=1&x=y")
+    assert seen == ["https://h.example/%5BG%5D%20a%20b.torrent?token=1&x=y"]
